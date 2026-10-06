@@ -1,0 +1,6 @@
+import ReactDOM from 'react-dom/client';
+import '@fontsource/silkscreen/400.css';
+import '@fontsource/silkscreen/700.css';
+import './style.css';
+import App from './App';
+ReactDOM.createRoot(document.getElementById('root')!).render(<App />);

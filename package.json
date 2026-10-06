@@ -1,0 +1,47 @@
+{
+  "name": "abisena-office",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "engines": { "node": ">=22.13.0" },
+  "scripts": {
+    "dev": "concurrently -k -n server,game \"tsx watch apps/server/src/index.ts\" \"vite --host 127.0.0.1\"",
+    "dev:server": "tsx watch apps/server/src/index.ts",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "test": "tsx --test tests/core.test.ts",
+    "test:e2e": "playwright test",
+    "assets": "python3 scripts/download-assets.py",
+    "map:export": "tsx scripts/export-map.ts"
+  },
+  "dependencies": {
+    "@fontsource/dm-sans": "^5.2.8",
+    "@opencode-ai/sdk": "^1.0.0",
+    "concurrently": "^9.1.2",
+    "dotenv": "^16.4.7",
+    "fastify": "^5.2.1",
+    "openai": "^6.0.0",
+    "zod": "^3.24.2",
+    "@fontsource/silkscreen": "^5.2.7",
+    "howler": "^2.2.4",
+    "lucide-react": "^0.468.0",
+    "phaser": "^3.90.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "recharts": "^3.0.0",
+    "zustand": "^5.0.3"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.0",
+    "@types/howler": "^2.2.12",
+    "@types/node": "^22.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "@playwright/test": "^1.51.0",
+    "tailwindcss": "^4.1.0",
+    "tsx": "^4.19.3",
+    "typescript": "~5.7.2",
+    "vite": "^6.1.0"
+  }
+}
