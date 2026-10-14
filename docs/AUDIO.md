@@ -1,5 +1,21 @@
 # Audio
 
+## Revision 2 sound layer
+
+Added 21 original-source CC0 recordings from **Kenney Impact Sounds** and **Kenney Digital Audio**, retaining the existing 14 Interface Sounds and two recorded music tracks. Exact filename/creator/source/license mapping is in `ASSETS.md`; original archive licenses are bundled in `public/audio/`.
+
+New cues include alternating wooden footsteps, doorways, printer/supplies, meeting bell, knife slash + stab layers, dynamic whip cue, retro rifle shot, body impact/fall, small hit/blood layer, death, revive/heal, machine alarm, electric pulse and nearby machine loops. Scheduled-task start/finish and regular work/error cues are distinct. No generated music or copied reference-game soundtrack is used.
+
+Weapon sound/muzzle feedback is local and immediate, including misses. Confirmed impacts add separate server-event-driven layers. Volume/pitch/pan variations are applied during playback; source files are unchanged. Nearby active machines use quiet loops and stop when paused, released, out of range, SFX-disabled or muted. Reduced-motion and violence/blood settings control visual feedback independently from master/SFX controls.
+
+Maintenance-only download command for the new bank:
+
+```bash
+python3 scripts/download-combat-audio.py
+```
+
+`npm run assets` restores both the original and new banks. Normal startup requires no asset downloads.
+
 ## Recorded soundtrack
 
 No generated music in the active game. Two bundled legal recordings:

@@ -29,3 +29,33 @@ All third-party audio is bundled under `public/audio/`. Verified source licenses
 Tile vocabulary: 32 px visual tiles, 16 px navigation cells. Character textures: 32×42 logical pixels, four directions, three walk/idle frames plus blink. Layer choices: skin, hair/style, shirt, jacket, pants/skirt, shoes, glasses, hat and badge. All render nearest-neighbor.
 
 Music source links and required Matthew Pablo attribution are also in `CREDITS.md`. The prior synthesized music in retained legacy `src/lib/audio.ts` is not imported by the active application.
+
+## Revision 2: additional CC0 sound bank
+
+Creator for every file below: **Kenney**. Files unchanged; runtime playback may vary rate/gain/panning or use loops. Original license text is included alongside each bank. Downloaded directly from the creator, not copied out of a reference repository.
+
+| Filename | Original source | License | Main use |
+| --- | --- | --- | --- |
+| `footstep_wood_000.ogg` | [Impact Sounds](https://kenney.nl/assets/impact-sounds) | CC0 | Walking |
+| `footstep_wood_001.ogg` | same | CC0 | Alternating footsteps |
+| `impactPunch_heavy_000.ogg` | same | CC0 | Fists / boxing rig |
+| `impactPunch_medium_000.ogg` | same | CC0 | Knife hit / small hit layer |
+| `impactSoft_heavy_000.ogg` | same | CC0 | Body fall |
+| `impactSoft_medium_000.ogg` | same | CC0 | Body impact |
+| `impactMetal_light_000.ogg` | same | CC0 | Bullet wall impact |
+| `impactMetal_medium_000.ogg` | same | CC0 | Machine action |
+| `impactBell_heavy_000.ogg` | same | CC0 | Meeting bell |
+| `impactTin_medium_000.ogg` | same | CC0 | Printer / supplies / machine loop |
+| `impactGeneric_light_000.ogg` | same | CC0 | Light impact |
+| `impactWood_light_000.ogg` | same | CC0 | Doorway |
+| `laser5.ogg` | [Digital Audio](https://kenney.nl/assets/digital-audio) | CC0 | Fictional pixel rifle |
+| `laser9.ogg` | same | CC0 | Machine alarm |
+| `phaserDown1.ogg` | same | CC0 | Knife slash / projector loop |
+| `phaserUp1.ogg` | same | CC0 | Heal / recurring task started |
+| `phaseJump1.ogg` | same | CC0 | Whip crack |
+| `powerUp3.ogg` | same | CC0 | Revive / completion |
+| `zap1.ogg` | same | CC0 | Electric pulse |
+| `zap2.ogg` | same | CC0 | Electrical machine loop |
+| `zapThreeToneDown.ogg` | same | CC0 | Cartoon death cue |
+
+`KENNEY-IMPACT-LICENSE.txt` and `KENNEY-DIGITAL-LICENSE.txt` are verbatim archive license statements. New knife, whip, rifle, blood squares, sparks, HP bars, corpse/revive poses, machinery and room visuals are original code-drawn artwork in the same palette; no LPC/share-alike sprite assets were imported.

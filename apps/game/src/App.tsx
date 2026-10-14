@@ -8,7 +8,9 @@ import { HR, Hire, EmployeeDialogue } from './ui/Employees';
 import { AssignTask, Chat, Network, ProviderForm, Tasks } from './ui/Agents';
 import { Analytics, Board, Company, Computer, Meetings, Reports, ReportView } from './ui/Company';
 import { AudioOptions, Character, Coffee, Inventory, Options, Pause } from './ui/Options';
-const titles: Record<Screen, string> = { pause: 'PAUSED / TAKE YOUR TIME', hr: 'HR TERMINAL / PEOPLE & CULTURE', employee: 'A CONVERSATION', hire: 'HR / EMPLOYEE FILE', chat: 'EMPLOYEE CONVERSATION', assign: 'NEW ASSIGNMENT', tasks: 'WORK QUEUE', network: 'IT TERMINAL / AGENT NETWORK', provider: 'NEW CONNECTION', computer: 'ABISENA OS', reports: 'REPORT TRAY', report: 'INTERNAL REPORT', meetings: 'MEETING ROOM / PROJECTOR', board: 'COMPANY WHITEBOARD', company: 'PT / COMPANY RECORDS', analytics: 'ABISENA OS / ANALYTICS', finance: 'ABISENA OS / FINANCE', audio: 'LOUNGE RADIO / AUDIO', graphics: 'OPTIONS / GRAPHICS', gameplay: 'OPTIONS / GAMEPLAY', character: 'DIRECTOR’S WARDROBE', inventory: 'INVENTORY', controls: 'CONTROLS', coffee: 'PANTRY / COFFEE MACHINE', plant: 'A VERY GOOD FERN' };
+import { Schedules, ScheduleEditor } from './ui/Schedules';
+import { Healing, Incidents, TortureRoom } from './ui/Health';
+const titles: Record<Screen, string> = { pause: 'PAUSED / TAKE YOUR TIME', hr: 'HR TERMINAL / PEOPLE & CULTURE', employee: 'A CONVERSATION', hire: 'HR / EMPLOYEE FILE', chat: 'EMPLOYEE CONVERSATION', assign: 'NEW ASSIGNMENT', tasks: 'WORK QUEUE', network: 'IT TERMINAL / AGENT NETWORK', provider: 'NEW CONNECTION', computer: 'ABISENA OS', reports: 'REPORT TRAY', report: 'INTERNAL REPORT', meetings: 'MEETING ROOM / PROJECTOR', board: 'COMPANY WHITEBOARD', company: 'PT / COMPANY RECORDS', analytics: 'ABISENA OS / ANALYTICS', finance: 'ABISENA OS / FINANCE', audio: 'LOUNGE RADIO / AUDIO', graphics: 'OPTIONS / GRAPHICS', gameplay: 'OPTIONS / GAMEPLAY', character: 'DIRECTOR’S WARDROBE', inventory: 'INVENTORY', controls: 'CONTROLS', coffee: 'PANTRY / COFFEE MACHINE', plant: 'A VERY GOOD FERN', schedules: 'ABISENA OS / RECURRING TASKS', 'schedule-edit': 'AUTOPILOT / SCHEDULE EDITOR', heal: 'EMPLOYEE CARE / FULL HP', torture: 'TORTURE ROOM / MACHINE CONTROLS', incidents: 'HR / INCIDENT ARCHIVE' };
 
 function WindowContent({ screen, id }: { screen: Screen; id?: string }) {
   const world = useGame(s => s.world!); const employee = world.employees.find(e => e.id === id);
@@ -20,10 +22,15 @@ function WindowContent({ screen, id }: { screen: Screen; id?: string }) {
     case 'chat': return employee ? <Chat employee={employee} /> : <Empty>Employee not found.</Empty>;
     case 'assign': return <AssignTask employeeId={id} />;
     case 'tasks': return <Tasks employeeId={id} />;
+    case 'schedules': return <Schedules employeeId={id} />;
+    case 'schedule-edit': return <ScheduleEditor editId={id} />;
+    case 'heal': return <Healing employeeId={id} />;
+    case 'torture': return <TortureRoom employeeId={id && world.employees.some(e => e.id === id) ? id : undefined} />;
+    case 'incidents': return <Incidents />;
     case 'network': return <Network />;
     case 'provider': return <ProviderForm providerId={id} />;
     case 'computer': return <Computer />;
-    case 'reports': return <Reports employeeId={id && world.employees.some(e => e.id === id) ? id : undefined} />;
+    case 'reports': return <Reports employeeId={id && world.employees.some(e => e.id === id) ? id : undefined} printer={id === 'printer'} />;
     case 'report': return <ReportView reportId={id!} />;
     case 'meetings': return <Meetings employeeId={id && world.employees.some(e => e.id === id) ? id : undefined} />;
     case 'board': return <Board />;

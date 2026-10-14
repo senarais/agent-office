@@ -1,5 +1,16 @@
 # Development notes
 
+## Revision 2 — scheduled work and arcade gameplay
+
+Before implementation, re-inspected all five office references plus the six combat/art references. LPC generators inform ordered character/equipment layers and per-action frame timing, not imported art (LPC assets carry individual attribution/share-alike requirements). Pixel Effect Generator informs bounded deterministic square-particle bursts. Street-fighter-game informs anticipation/impact/recovery and hitboxes; Top-Down-Shooter informs immediate muzzle feedback, directional hit tests and reusable effect pools. Tiddybub is an asset discovery index only: check original licenses. New sounds will come directly from Kenney CC0 Impact Sounds / Digital Audio. Pixabay license page returned HTTP 403, so no Pixabay asset is used.
+
+Implementation decisions:
+- Server-authoritative HP/hits; immediate predicted local attack audiovisuals, including empty-space fire. Shared weapon balance, directional hitscan/melee and world occlusion. Full/reduced/off and separate blood toggle.
+- Death retains a corpse and unresolved employee record. Resurrect, terminate or template-replace explicitly. Old saves migrate in-place; no roster reset.
+- Server scheduler reuses the actual task executor. One-time, daily, weekly, interval and cron, IANA timezones, persistent occurrence keys, bounded retry, no overlapping runs. Downtime coalesces missed occurrences into one run; no pretend execution while the computer is off.
+- One compact physical punishment room carved from existing office space, seven interchangeable cartoon machines, persisted session/pulse state, no offline damage catch-up, no realistic gore.
+- Supabase receives new schedules/run/session tables through a separate additive migration. Existing local/remote saves retain history and provider vaults.
+
 ## Pre-implementation research — 2026-10-06
 
 Inspected repository metadata, README architecture, file trees, and implementation entry points from all five requested references using GitHub's API/raw source. This is an independent implementation; no reference code or assets are incorporated.
@@ -31,3 +42,15 @@ Build/typecheck; isolated backend lifecycle/persistence/cancellation/security te
 - Active music is existing licensed audio. No synthesized music from the legacy runtime is imported.
 
 Current architecture is intentionally single-writer/local. OpenCode permissions are approved in its attached client; task pause is explicit cancellation with preserved context. Live vendor credentials and hosted Supabase connectivity require user configuration.
+
+## Revision 2 verification findings
+
+- A pre-revision SQLite backup was created in the ignored local data directory before changing saved record shape. Existing user staff/configuration were preserved.
+- Scheduler reuses actual adapters and tasks; tests verify real provider-fixture execution without a browser, timezone/DST boundaries, recurrence CRUD, duplicate prevention, downtime coalescing, bounded retry and provider overrides.
+- Combat browser tests delay network traffic and still observe immediate shots. Directional hits, multiple-hit kills, visible HP, blood effects, persistent corpse sprites, healing, resurrection and both replacement workflows are verified.
+- All seven machine methods have runnable state/persistence checks; browser flow verifies physical arrival, active cycles, stopping, reloading paused state and release.
+- Added explicit Vite deny rules for local databases/backups/keys/environment files, plus an HTTP regression test. Test servers disable remote Supabase writes.
+- Both Postgres migrations were executed against the isolated local test database. HP/corpse constraints, unique scheduled occurrences, references, machine records and RLS passed; all 23 tables have RLS. No hosted schema migration was applied by development tooling.
+- Final browser runs exposed a moving-NPC interaction race: client interpolation used an old position while the employee had already started a coffee trip. Canvas clicks now pursue the live target, obtain an authoritative nearby hold/position, align before dialogue, and release after a brief natural pause. Keyboard interactions synchronize player position before the hold request; walls block interactions. Requests cancelled while approaching release their NPC hold.
+
+Final verification: 36 backend/shared checks passed; 6 Playwright flows passed (1 optional live OpenAI check skipped without environment credentials); TypeScript/production build passed; 35 OGG files decoded successfully in the browser; default development server returned save version 2 with both original staff records retained. Screenshots are under `docs/screenshots/`.

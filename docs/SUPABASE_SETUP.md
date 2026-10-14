@@ -34,13 +34,20 @@ Keep this key server-side. It bypasses RLS and must not be distributed with scre
 
 Open Supabase **SQL Editor → New query**. Paste and run the entire file:
 
-[`supabase/migrations/20261006042020_office_game.sql`](../supabase/migrations/20261006042020_office_game.sql)
+Run these files in order:
+
+1. [`supabase/migrations/20261006042020_office_game.sql`](../supabase/migrations/20261006042020_office_game.sql)
+2. [`supabase/migrations/20261006213943_scheduler_combat_and_torture.sql`](../supabase/migrations/20261006213943_scheduler_combat_and_torture.sql)
+
+**Existing installation:** apply only the second file if the original migration is already installed. It is additive; it does not delete employees, tasks, reports, connections or history.
 
 No schema invention is required. The migration is transactional and creates:
 
 `companies`, `employees`, `employee_appearance`, `employee_provider_config`, `employment_history`, `tasks`, `task_events`, `conversations`, `messages`, `reports`, `meetings`, `meeting_participants`, `meeting_messages`, `provider_connections`, `game_settings`, `company_settings`, `office_state`, `player_state`, `inventory`, `incidents`.
 
 Each record has UUID primary key, `created_at`, `updated_at`, JSONB payload and indexed company relationship. Generated typed columns support employment status, task state, employee/conversation/meeting relationships. Status constraints reject invalid states. Provider metadata explicitly rejects raw credential fields.
+
+Revision 2 adds `recurring_tasks`, `scheduled_task_runs`, and `torture_sessions` (23 tables total), plus generated/indexed employee `max_hp`, `current_hp`, `corpse_present` columns. HP/corpse constraints, schedule/provider/task relationships, unique schedule occurrences and machine-method/status checks are included. Schedule delete uses a tombstone so run history and FK relationships remain valid. Inventory now includes healing food/drinks and the knife.
 
 The active engine uses typed JSON records so the replica stores the exact records without lossy field mapping. SQL queries use the indexed generated columns. A complete `office_state` snapshot is written last for consistent full-game restoration.
 
@@ -86,6 +93,10 @@ select name, role, department, employment_status from public.employees;
 select employee_id, status, payload->>'title' as title from public.tasks;
 select conversation_id, payload->>'text' as message from public.messages;
 select updated_at, payload->>'version' as save_version from public.office_state;
+select name, employment_status, current_hp, max_hp, corpse_present from public.employees;
+select employee_id, schedule_type, timezone, enabled, next_run_at from public.recurring_tasks;
+select recurring_task_id, scheduled_at, status, payload->>'attempt' as attempt from public.scheduled_task_runs;
+select employee_id, method, status, payload->>'pulses' as cycles from public.torture_sessions;
 ```
 
 3. Reload browser; records remain.
@@ -96,7 +107,7 @@ Tasks interrupted by a server restart become **BLOCKED**, requiring explicit ret
 
 ## RLS and permissions
 
-All 20 tables have RLS enabled. `anon` and `authenticated` have no table privileges and no access policies. Only backend `service_role` is granted CRUD. This matches the no-login, localhost-only design. No publicly callable security-definer function is created.
+All 23 tables have RLS enabled. `anon` and `authenticated` have no table privileges and no access policies. Only backend `service_role` is granted CRUD. This matches the no-login, localhost-only design. No publicly callable security-definer function is created.
 
 If changing to a hosted multi-user product later, introduce authenticated company membership and ownership policies before allowing browser access. Do not merely grant anonymous access to fix a connection problem.
 
@@ -108,4 +119,4 @@ None required. Appearance is modular JSON, music is bundled, and small text/code
 
 ## Verification performed
 
-Migration executed successfully against a disposable PostgreSQL 16 database. `tests/database-check.sql` validates generated columns, service-role writes, permanent employment state, secret/status constraints and 20/20 RLS tables. Actual hosted Supabase connectivity requires your project URL/key; no project was modified during development.
+Both migrations executed successfully against a disposable PostgreSQL 16 database. `tests/database-check.sql` verifies the original tables; `tests/revision-database-check.sql` verifies HP/corpse/resurrection state, schedule FK/occurrence uniqueness, machine/session records and new RLS policies. All 23/23 tables were confirmed RLS-enabled. No hosted schema migration was applied by development tooling. Configure your project URL/key and apply the SQL files before using the remote replica.

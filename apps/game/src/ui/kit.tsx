@@ -1,4 +1,4 @@
-import { cloneElement, isValidElement, useEffect, useId, useRef, useState } from 'react';
+import { Children, cloneElement, isValidElement, useEffect, useId, useRef, useState } from 'react';
 import type { ButtonHTMLAttributes, PropsWithChildren, ReactNode, ReactElement } from 'react';
 import type { Appearance } from '../../../../packages/shared/src/types';
 import { drawCharacter } from '../game/art';
@@ -25,7 +25,7 @@ export function PixelWindow({ title, subtitle, children, wide = false, dialogue 
   </section></div>;
 }
 export function PixelTabs({ values, current, onChange }: { values: string[]; current: string; onChange: (value: string) => void }) { return <div className="pixel-tabs" role="tablist">{values.map(value => <button type="button" key={value} role="tab" aria-selected={value === current} onClick={() => onChange(value)}>{value}</button>)}</div>; }
-export function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) { const id = useId(); return <div className="field"><label htmlFor={id}>{label}</label>{isValidElement(children) ? cloneElement(children as ReactElement<{ id?: string; 'aria-describedby'?: string }>, { id, 'aria-describedby': hint ? `${id}-hint` : undefined }) : children}{hint && <small id={`${id}-hint`}>{hint}</small>}</div>; }
+export function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) { const id = useId(); return <div className="field"><label htmlFor={id}>{label}</label>{Children.map(children, child => isValidElement(child) && ['input', 'textarea', 'select'].includes(child.type as string) ? cloneElement(child as ReactElement<{ id?: string; 'aria-describedby'?: string }>, { id, 'aria-describedby': hint ? `${id}-hint` : undefined }) : child)}{hint && <small id={`${id}-hint`}>{hint}</small>}</div>; }
 export function PixelProgress({ value, label }: { value: number; label: string }) { return <div className="stat"><span>{label}</span><div role="meter" aria-valuenow={value} aria-valuemin={0} aria-valuemax={100} aria-label={label}><i style={{ width: `${value}%` }} /></div><b>{value}</b></div>; }
 export function Empty({ children }: PropsWithChildren) { return <div className="empty"><span className="empty-symbol">[ · · · ]</span><p>{children}</p></div>; }
 export function Avatar({ appearance, boss = false, size = 3 }: { appearance: Appearance; boss?: boolean; size?: number }) { const ref = useRef<HTMLCanvasElement>(null); useEffect(() => { const c = ref.current!.getContext('2d')!; c.clearRect(0, 0, 32, 42); drawCharacter(c, appearance, 0, 0, boss); }, [appearance, boss]); return <canvas className="avatar" width={32} height={42} style={{ width: 32 * size, height: 42 * size }} ref={ref} aria-label="Pixel character portrait" />; }

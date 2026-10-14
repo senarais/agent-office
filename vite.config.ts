@@ -6,7 +6,7 @@ export default defineConfig(({ mode }) => {
   const proxy = { '/api': `http://127.0.0.1:${process.env.PORT || env.PORT || 3001}` };
   return {
   plugins: [react()],
-  server: { host: '127.0.0.1', port: Number(process.env.GAME_PORT || env.GAME_PORT) || 5173, strictPort: true, proxy },
+  server: { host: '127.0.0.1', port: Number(process.env.GAME_PORT || env.GAME_PORT) || 5173, strictPort: true, proxy, fs: { deny: ['.env', '.env.*', '*.{crt,pem}', '**/.git/**', '**/.local-data/**', '**/.test-data/**', '**/*.sqlite*', '**/*.key'] } },
   preview: { host: '127.0.0.1', port: 5173, strictPort: true, proxy },
   build: { rollupOptions: { output: { manualChunks: {
     phaser: ['phaser'],

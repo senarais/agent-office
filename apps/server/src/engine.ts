@@ -1,7 +1,10 @@
 import { EventEmitter } from 'node:events';
-import type { Employee, EventType, Point, ProviderConfig, Task, WorldState, Weapon, Meeting, ServerEvent } from '../../../packages/shared/src/types';
+import type { Employee, EventType, Point, ProviderConfig, Task, WorldState, Weapon, Meeting, ServerEvent, AttackEvent, PunishmentMethod, TortureSession } from '../../../packages/shared/src/types';
+import type { RecurringTask, ScheduleRun } from '../../../packages/shared/src/automation';
+import { weapons, traceAttack, punishments } from '../../../packages/shared/src/combat';
+import { Scheduler } from './scheduler';
 import { terminalTasks } from '../../../packages/shared/src/types';
-import { canStand, distance, exit, findPath, meetingSpots, nearbyWalkable, moveWithCollision, spawn, workstations } from '../../../packages/shared/src/world';
+import { canStand, distance, exit, findPath, meetingSpots, nearbyWalkable, moveWithCollision, spawn, workstations, punishmentSpot } from '../../../packages/shared/src/world';
 import { Store, id, now } from './database';
 import { createProvider, safeError } from './providers';
 import type { AgentRequest, AgentProvider } from './providers';
@@ -9,22 +12,23 @@ import { employeeSchema, taskSchema, providerSchema } from './schemas';
 
 export class GameError extends Error { constructor(message: string, public status = 400) { super(message); } }
 export class Engine {
-  bus = new EventEmitter(); running = new Map<string, { employeeId: string; controller: AbortController }>();
+  bus = new EventEmitter(); running = new Map<string, { employeeId: string; providerId: string; controller: AbortController }>();
   private paths = new Map<string, { goal: string; points: Point[] }>();
-  private holds = new Map<string, number>(); private attacks = new Map<string, number>();
+  private holds = new Map<string, number>(); private lastAttackAt = -Infinity; private attackIds = new Set<string>();
+  scheduler: Scheduler; private lastScheduleTick = 0;
   private lastSnapshot = 0; private lastSave = 0; private lastIdle = 0; private meetingRuns = new Set<string>(); private stopped = false;
   providerFactory: (config: ProviderConfig, secret: ReturnType<Store['secret']>) => AgentProvider = createProvider;
-  constructor(public store: Store) { this.bus.setMaxListeners(100); }
+  constructor(public store: Store, public clock: () => number = Date.now) { this.bus.setMaxListeners(100); this.scheduler = new Scheduler(this); }
   get s(): WorldState { return this.store.state; }
   recover() {
     for (const t of this.s.tasks) if (['STARTING', 'WORKING', 'WAITING_FOR_TOOL', 'WAITING_FOR_USER'].includes(t.status)) { t.status = 'BLOCKED'; t.error = 'Server restarted during work. Retry explicitly to avoid duplicate provider execution.'; }
     for (const m of this.s.messages) if (m.status === 'streaming') { m.status = 'error'; m.error = 'Server restarted. Retry message.'; }
     for (const m of this.s.meetings) if (['gathering', 'running'].includes(m.status)) { m.status = 'failed'; m.error = 'Server restarted during meeting'; }
-    for (const e of this.s.employees) if (e.employmentStatus === 'active') { const blocked = this.s.tasks.some(t => t.employeeId === e.id && t.status === 'BLOCKED'); e.state = blocked ? 'blocked' : e.reportId ? 'report' : 'idle'; e.destination = { ...e.home }; }
+    for (const e of this.s.employees) if (e.employmentStatus === 'active') { const blocked = this.s.tasks.some(t => t.employeeId === e.id && t.status === 'BLOCKED'); const session = this.s.tortureSessions.find(s => s.id === e.tortureId && ['walking', 'active', 'paused'].includes(s.status)); e.state = session ? distance(e.position, punishmentSpot) < 8 ? 'torture' : 'walking' : blocked ? 'blocked' : e.reportId ? 'report' : 'idle'; e.destination = session ? { ...punishmentSpot } : { ...e.home }; if (session) session.nextPulseAt = this.clock() + punishments[session.method].interval; }
     this.store.save();
   }
-  emit(type: EventType, text: string, entityId?: string) {
-    const event = { id: id(), type, text, entityId, createdAt: now() };
+  emit(type: EventType, text: string, entityId?: string, notify = true) {
+    const event = { id: id(), type, text, entityId, createdAt: now(), notify };
     this.s.events.unshift(event); this.s.events = this.s.events.slice(0, 500);
     this.bus.emit('message', { type: 'event', event } satisfies ServerEvent); this.save(); this.snapshot(true);
   }
@@ -37,60 +41,99 @@ export class Engine {
     return e;
   }
   adapter(e: Employee) {
+    if (e.tortureId) throw new GameError('Release this employee from the torture room before agent work.', 409);
     const p = this.s.providers.find(p => p.id === e.providerId);
     if (!p) throw new GameError('NO AGENT PROVIDER CONNECTED. Visit the IT/server terminal, then edit this employee in HR.', 409);
     if (!e.model) throw new GameError('No model selected. Edit employee in HR.', 409);
     return this.providerFactory(p, this.store.secret(p.id));
   }
   private failure(error: unknown, providerId: string) { const secret = this.store.secret(providerId); return safeError(error, [secret.apiKey || '', ...Object.values(secret.headers || {})]); }
-  hire(input: unknown) {
+  hire(input: unknown, replacingId?: string) {
     const data = employeeSchema.parse(input);
-    if (this.s.employees.filter(e => e.employmentStatus === 'active').length >= 20) throw new GameError('Office capacity: 20 employees.');
-    const slots = workstations[data.department], occupied = this.s.employees.filter(e => e.department === data.department && e.employmentStatus === 'active');
+    if (this.s.employees.filter(e => ['active', 'deceased'].includes(e.employmentStatus) && e.id !== replacingId).length >= 20) throw new GameError('Office capacity: 20 employees, including unresolved deceased employees.');
+    const slots = workstations[data.department], occupied = this.s.employees.filter(e => e.department === data.department && ['active', 'deceased'].includes(e.employmentStatus) && e.id !== replacingId);
     if (occupied.length >= slots.length) throw new GameError(`${data.department} has four workstations; another department has space.`);
     const home = slots.find(p => !occupied.some(e => distance(e.home, p) < 12))!;
-    const e: Employee = { ...data, id: id(), employmentStatus: 'active', state: 'walking', position: nearbyWalkable(spawn, this.s.employees.length), home: { ...home }, destination: { ...home }, bubble: 'First day! Where is the coffee?', bubbleUntil: Date.now() + 5000, morale: 85, energy: 100, relationship: 70, stress: 5, hiredAt: now(), following: false };
+    const e: Employee = { ...data, id: id(), employmentStatus: 'active', state: 'walking', position: nearbyWalkable(spawn, this.s.employees.length), home: { ...home }, destination: { ...home }, bubble: 'First day! Where is the coffee?', bubbleUntil: Date.now() + 5000, morale: 85, energy: 100, relationship: 70, stress: 5, maxHp: 100, currentHp: 100, productivity: 100, corpsePresent: false, hiredAt: now(), following: false, predecessorId: replacingId };
     this.s.employees.push(e); this.s.history.push({ id: id(), employeeId: e.id, name: e.name, role: e.role, status: 'active', createdAt: now() }); this.emit('employee.hired', `${e.name} joined ${e.department}. Welcome aboard!`, e.id); return e;
   }
   edit(employeeId: string, input: unknown) {
     const e = this.employee(employeeId), data = employeeSchema.parse(input);
     if ([...this.running.values()].some(r => r.employeeId === e.id)) throw new GameError('Finish or cancel current work before changing agent configuration.', 409);
     if (data.department !== e.department) {
-      const home = workstations[data.department].find(p => !this.s.employees.some(a => a.employmentStatus === 'active' && a.id !== e.id && distance(a.home, p) < 12));
+      const home = workstations[data.department].find(p => !this.s.employees.some(a => ['active', 'deceased'].includes(a.employmentStatus) && a.id !== e.id && distance(a.home, p) < 12));
       if (!home) throw new GameError('Department is full'); e.home = { ...home }; e.destination = { ...home };
     }
     Object.assign(e, data); this.emit('employee.updated', `${e.name}’s employee file updated.`, e.id); return e;
   }
-  endEmployment(employeeId: string, status: 'fired' | 'deceased') {
-    const e = this.employee(employeeId); e.employmentStatus = status; e.endedAt = now(); e.following = false; e.reportId = undefined;
+  private interrupt(e: Employee, reason: string) {
+    e.following = false; e.reportId = undefined;
     for (const [key, run] of this.running) if (run.employeeId === e.id) { run.controller.abort(); this.running.delete(key); }
-    for (const task of this.s.tasks) if (task.employeeId === e.id && !terminalTasks.includes(task.status)) { task.status = 'CANCELLED'; task.error = `Interrupted: employee ${status}`; task.completedAt = now(); }
+    for (const task of this.s.tasks) if (task.employeeId === e.id && !terminalTasks.includes(task.status)) { task.status = 'CANCELLED'; task.error = `Interrupted: ${reason}`; task.completedAt = now(); }
     for (const meeting of this.s.meetings) if (meeting.attendeeIds.includes(e.id) && ['gathering', 'running'].includes(meeting.status)) this.cancelMeeting(meeting.id);
-    for (const message of this.s.messages) if (message.status === 'streaming' && this.s.conversations.some(c => c.id === message.conversationId && c.employeeId === e.id)) { message.status = 'cancelled'; message.error = `Employee ${status}`; }
+    for (const message of this.s.messages) if (message.status === 'streaming' && this.s.conversations.some(c => c.id === message.conversationId && c.employeeId === e.id)) { message.status = 'cancelled'; message.error = reason; }
     this.holds.delete(e.id); this.paths.delete(e.id);
-    e.state = status === 'deceased' ? 'dead' : 'leaving'; e.destination = { ...exit };
-    e.bubble = status === 'deceased' ? 'Out of office. Permanently.' : 'I am taking my emotional-support stapler.'; e.bubbleUntil = Date.now() + 7000;
+  }
+  endEmployment(employeeId: string, status: 'fired' | 'deceased') {
+    const e = this.employee(employeeId, false); if (['fired', 'quit'].includes(e.employmentStatus) || status === 'deceased' && e.employmentStatus === 'deceased') throw new GameError('Employment case already resolved');
+    const wasDead = e.employmentStatus === 'deceased'; e.employmentStatus = status; this.interrupt(e, `employee ${status}`);
+    const session = this.s.tortureSessions.find(s => s.id === e.tortureId);
+    if (session) { session.status = status === 'deceased' ? 'deceased' : 'released'; session.endedAt = now(); }
+    e.tortureId = undefined;
+    if (status === 'deceased') { e.currentHp = 0; e.corpsePresent = true; e.diedAt = now(); e.state = 'dead'; e.destination = { ...e.position }; delete e.endedAt; }
+    else { e.endedAt = now(); e.corpsePresent = false; e.state = wasDead ? 'idle' : 'leaving'; e.destination = wasDead ? { ...e.position } : { ...exit }; }
+    this.scheduler.pauseEmployee(e.id, status === 'deceased' ? 'Employee deceased' : 'Employee terminated');
+    e.bubble = status === 'deceased' ? '... HR paperwork pending.' : 'I am taking my emotional-support stapler.'; e.bubbleUntil = Date.now() + 7000;
     this.s.history.push({ id: id(), employeeId: e.id, name: e.name, role: e.role, status, createdAt: now() });
-    this.emit(status === 'deceased' ? 'employee.deceased' : 'employee.fired', `${e.name} ${status === 'fired' ? 'is packing up' : 'is deceased'}. ${e.role}: VACANT.`, e.id);
+    this.emit(status === 'deceased' ? 'employee.deceased' : 'employee.fired', `${e.name} ${status === 'fired' ? 'has been terminated. Role vacant.' : 'is deceased. Resolve their case in HR or at the body.'}`, e.id);
+  }
+  resurrect(employeeId: string) {
+    const e = this.employee(employeeId, false); if (e.employmentStatus !== 'deceased') throw new GameError('Only unresolved deceased employees can be resurrected');
+    const home = workstations[e.department].find(p => !this.s.employees.some(a => a.id !== e.id && ['active', 'deceased'].includes(a.employmentStatus) && distance(a.home, p) < 12));
+    if (!home) throw new GameError('Department full. Resolve another staffing case before resurrection.');
+    e.home = { ...home }; e.employmentStatus = 'active'; e.currentHp = e.maxHp; e.corpsePresent = false; e.state = 'idle'; e.hurtUntil = undefined; e.destination = { ...home }; e.tortureId = undefined; delete e.endedAt;
+    e.bubble = 'HR approved my return from the beyond.'; e.bubbleUntil = this.clock() + 6000; this.scheduler.reviveEmployee(e.id);
+    this.s.history.push({ id: id(), employeeId: e.id, name: e.name, role: e.role, status: 'active', createdAt: now() }); this.emit('employee.revived', `${e.name} resurrected. HP restored; employment continues.`, e.id); return e;
+  }
+  replaceEmployee(employeeId: string, input: unknown, mode: 'similar' | 'new') {
+    const old = this.employee(employeeId, false); if (!['deceased', 'fired', 'quit'].includes(old.employmentStatus) || old.replacedBy) throw new GameError('Resolve a deceased or terminated employee who has not already been replaced');
+    const requested = employeeSchema.parse(input); const data = mode === 'similar' ? { ...employeeSchema.parse(old), name: requested.name, appearance: requested.appearance, personality: requested.personality } : requested;
+    // Hire validates slot/capacity and payload before any old record is terminated.
+    const replacement = this.hire(data, old.id);
+    if (old.employmentStatus === 'deceased') this.endEmployment(old.id, 'fired');
+    old.replacedBy = replacement.id;
+    if (mode === 'similar') this.scheduler.copyTemplates(old.id, replacement.id);
+    this.emit('employee.updated', `${replacement.name} replaces ${old.name}${mode === 'similar' ? ' with the same role and schedule templates' : ' as a new employee'}.`, replacement.id); return replacement;
+  }
+  heal(employeeId: string, item: 'food' | 'drinks' | 'coffee' | 'energyDrinks') {
+    const e = this.employee(employeeId, false); if (e.employmentStatus === 'deceased') throw new GameError('Food and drinks cannot revive the dead. Choose Resurrect.'); this.employee(e.id);
+    if (e.currentHp === e.maxHp) throw new GameError('Employee HP is already full');
+    if (this.s.player[item] <= 0) throw new GameError('No consumable left. Restock at the pantry.');
+    this.s.player[item]--; e.currentHp = e.maxHp; e.hurtUntil = undefined; e.morale = Math.min(100, e.morale + 5); e.energy = Math.min(100, e.energy + 10); e.bubble = 'Full HP. Finally, decent benefits.'; e.bubbleUntil = this.clock() + 4000; this.emit('employee.healed', `${e.name}: HP fully restored.`, e.id); return e;
   }
   interact(employeeId: string, hold: boolean) {
     const e = this.employee(employeeId);
     if (hold && distance(e.position, this.s.player) > 90) throw new GameError('Walk closer to this employee.');
-    if (hold) this.holds.set(e.id, Date.now() + 60000); else this.holds.delete(e.id);
+    this.holds.set(e.id, this.clock() + (hold ? 60000 : 300));
+    return e;
   }
-  follow(employeeId: string) { const e = this.employee(employeeId); e.following = !e.following; if (!e.following) e.destination = { ...e.home }; this.holds.delete(e.id); this.emit('employee.updated', `${e.name}: ${e.following ? 'Right behind you, Boss.' : 'Back to my desk.'}`, e.id); }
-  task(input: unknown) {
+  follow(employeeId: string) { const e = this.employee(employeeId); if (e.tortureId) throw new GameError('Release this employee from the torture room first'); e.following = !e.following; if (!e.following) e.destination = { ...e.home }; this.holds.delete(e.id); this.emit('employee.updated', `${e.name}: ${e.following ? 'Right behind you, Boss.' : 'Back to my desk.'}`, e.id); }
+  task(input: unknown, scheduled?: { definition: RecurringTask; run: ScheduleRun }) {
     const data = taskSchema.parse(input), e = this.employee(data.employeeId);
-    const task: Task = { ...data, tools: data.tools.filter(t => e.tools.includes(t)), id: id(), providerId: e.providerId, model: e.model, status: 'QUEUED', result: '', createdAt: now() };
+    if (e.tortureId) throw new GameError('Release employee from torture room before assigning work');
+    const task: Task = { ...data, tools: data.tools.filter(t => e.tools.includes(t)), id: id(), providerId: scheduled?.definition.providerId ?? e.providerId, model: scheduled?.definition.model ?? e.model, status: 'QUEUED', result: '', createdAt: now(), ...(scheduled ? { scheduled: { scheduleId: scheduled.definition.id, runId: scheduled.run.id, notify: scheduled.definition.notify, autoDeliver: scheduled.definition.autoDeliver, outputDestination: scheduled.definition.outputDestination } } : {}) };
+    if (scheduled) { scheduled.run.taskId = task.id; this.s.scheduleRuns.push(scheduled.run); }
     this.s.tasks.push(task); this.holds.delete(e.id); e.following = false;
-    e.bubble = 'Got it, Boss.'; e.bubbleUntil = Date.now() + 2500; this.emit('task.created', `${e.name} queued “${task.title}”.`, task.id); this.dispatch(); return task;
+    e.bubble = scheduled ? 'Scheduled work. On it, Boss.' : 'Got it, Boss.'; e.bubbleUntil = Date.now() + 2500; this.emit(scheduled ? 'schedule.started' : 'task.created', `${e.name} queued “${task.title}”.`, task.id, scheduled?.definition.notify ?? true); this.dispatch(); return task;
   }
   private dispatch() {
     for (const e of this.s.employees.filter(e => e.employmentStatus === 'active')) {
-      if (e.reportId || this.s.meetings.some(m => ['gathering', 'running'].includes(m.status) && m.attendeeIds.includes(e.id))) continue;
+      if (e.tortureId || this.s.meetings.some(m => ['gathering', 'running'].includes(m.status) && m.attendeeIds.includes(e.id))) continue;
       if (this.s.tasks.some(t => t.employeeId === e.id && !terminalTasks.includes(t.status) && t.status !== 'QUEUED') || [...this.running.values()].some(r => r.employeeId === e.id)) continue;
       const task = this.s.tasks.filter(t => t.employeeId === e.id && t.status === 'QUEUED').sort((a, b) => ['High', 'Normal', 'Low'].indexOf(a.priority) - ['High', 'Normal', 'Low'].indexOf(b.priority))[0];
       if (!task) continue;
+      // New work takes priority; unread reports remain safely in the printer/laptop tray.
+      e.reportId = undefined;
       task.status = 'WALKING_TO_WORKSTATION'; e.destination = { ...e.home }; e.state = 'walking'; e.following = false; this.paths.delete(e.id); this.save(); this.snapshot(true);
     }
   }
@@ -100,13 +143,13 @@ export class Engine {
   }
   private async execute(e: Employee, key: string, request: Omit<AgentRequest, 'signal' | 'system'>) {
     this.employee(e.id); const provider = this.adapter(e); const controller = new AbortController();
-    this.running.set(key, { employeeId: e.id, controller }); const timeout = setTimeout(() => controller.abort(new Error('Agent timeout after 5 minutes')), 300000);
+    this.running.set(key, { employeeId: e.id, providerId: e.providerId, controller }); const timeout = setTimeout(() => controller.abort(new Error('Agent timeout after 5 minutes')), 300000);
     try { const result = await provider.execute({ ...request, signal: controller.signal, system: this.context(e) }); controller.signal.throwIfAborted(); this.employee(e.id); return result; }
     finally { clearTimeout(timeout); if (this.running.get(key)?.controller === controller) this.running.delete(key); }
   }
   private async runTask(t: Task) {
     if (t.status !== 'WALKING_TO_WORKSTATION') return;
-    const e = this.employee(t.employeeId); t.status = 'STARTING'; t.startedAt = now(); e.state = 'working'; e.energy = Math.max(0, e.energy - 8); e.stress = Math.min(100, e.stress + 5); this.emit('task.started', `${e.name} started “${t.title}”.`, t.id);
+    const e = this.employee(t.employeeId); t.status = 'STARTING'; t.startedAt = now(); e.state = 'working'; e.energy = Math.max(0, e.energy - 8); e.stress = Math.min(100, e.stress + 5); this.emit('task.started', `${e.name} started “${t.title}”.`, t.id, t.scheduled?.notify ?? true);
     try {
       t.status = 'WORKING';
       // Freeze provider/model for this assignment; edits cannot redirect an in-flight task.
@@ -114,12 +157,13 @@ export class Engine {
       const result = await this.execute(profile, t.id, { model: t.model, tools: t.tools, projectPath: t.projectPath, sessionId: t.sessionId, messages: [{ role: 'user', content: `Task: ${t.title}\n${t.instructions}\nExpected output: ${t.expectedOutput || 'A useful, honest result.'}${t.clarification ? `\nAdditional clarification: ${t.clarification}` : ''}` }], onSession: sid => { t.sessionId = sid; this.save(); }, onText: delta => { if (terminalTasks.includes(t.status)) return; t.result += delta; this.snapshot(); }, onActivity: (activity, detail) => { if (terminalTasks.includes(t.status)) return; e.state = activity; e.bubble = detail; e.bubbleUntil = Date.now() + 5000; t.status = activity === 'waiting' ? 'WAITING_FOR_USER' : activity === 'working' ? 'WORKING' : 'WAITING_FOR_TOOL'; this.snapshot(); } });
       if (terminalTasks.includes(t.status)) return;
       t.result = result.text; t.usage = result.usage; t.status = 'REVIEWING'; this.snapshot(true);
-      const report = { id: id(), taskId: t.id, employeeId: e.id, title: t.title, text: t.result, createdAt: now(), approved: false, delivered: false };
-      this.s.reports.push(report); t.status = 'COMPLETED'; t.completedAt = now(); e.reportId = report.id; e.state = 'report'; e.destination = nearbyWalkable(this.s.player, this.s.employees.indexOf(e)); e.bubble = 'Boss, the report is ready!'; e.bubbleUntil = Date.now() + 15000; e.stress = Math.max(0, e.stress - 5);
-      this.emit('task.completed', `${e.name}: “Boss, the report is ready.”`, t.id);
+      const report = { id: id(), taskId: t.id, employeeId: e.id, title: t.title, text: t.result, createdAt: now(), approved: false, delivered: false, outputDestination: t.scheduled?.outputDestination ?? 'both' as const };
+      const deliver = t.scheduled?.autoDeliver ?? true;
+      this.s.reports.push(report); t.status = 'COMPLETED'; t.completedAt = now(); e.reportId = deliver ? report.id : undefined; e.state = deliver ? 'report' : 'idle'; e.destination = deliver ? nearbyWalkable(this.s.player, this.s.employees.indexOf(e)) : { ...e.home }; e.bubble = 'Boss, the report is ready!'; e.bubbleUntil = Date.now() + 15000; e.stress = Math.max(0, e.stress - 5);
+      this.scheduler.tick(); this.emit(t.scheduled ? 'schedule.finished' : 'task.completed', `${e.name}: “Boss, the report is ready.”`, t.id, t.scheduled?.notify ?? true);
     } catch (error) {
-      if (['CANCELLED', 'BLOCKED'].includes(t.status) || e.employmentStatus !== 'active') return;
-      t.status = error instanceof GameError ? 'BLOCKED' : 'FAILED'; t.error = this.failure(error, t.providerId); t.completedAt = now(); e.state = 'blocked'; e.bubble = '! I need your help, Boss.'; e.bubbleUntil = Date.now() + 20000; this.emit('task.failed', `${e.name}: ${t.error}`, t.id);
+      if (this.stopped || ['CANCELLED', 'BLOCKED'].includes(t.status) || e.employmentStatus !== 'active') return;
+      t.status = error instanceof GameError ? 'BLOCKED' : 'FAILED'; t.error = this.failure(error, t.providerId); t.completedAt = now(); e.state = 'blocked'; e.bubble = '! I need your help, Boss.'; e.bubbleUntil = Date.now() + 20000; this.emit('task.failed', `${e.name}: ${t.error}`, t.id, t.scheduled?.notify ?? true);
     }
   }
   taskAction(taskId: string, action: string, text = '') {
@@ -153,7 +197,7 @@ export class Engine {
         let budget = 40000; const recent = this.s.messages.filter(m => m.conversationId === cid && m.status === 'complete').slice(-20).reverse().filter(m => { budget -= m.text.length; return budget >= 0; }).reverse();
         const result = await this.execute(e, `chat:${reply.id}`, { model: e.model, tools: e.tools, sessionId: conversation!.sessionId, messages: recent.map(m => ({ role: m.role, content: m.text })), onSession: sid => { conversation!.sessionId = sid; this.save(); }, onText: delta => { if (message.status !== 'streaming') return; message.text += delta; this.snapshot(); }, onActivity: (_activity, detail) => { e.bubble = detail; e.bubbleUntil = Date.now() + 5000; this.snapshot(); } });
         if (message.status === 'streaming') { message.text = result.text; message.usage = result.usage; message.status = 'complete'; }
-      } catch (error) { if (message.status === 'streaming') { message.status = 'error'; message.error = this.failure(error, e.providerId); } }
+      } catch (error) { if (message.status === 'streaming') { message.status = 'error'; message.error = this.stopped ? 'Server stopped during reply' : this.failure(error, e.providerId); } }
       this.emit('chat.completed', `${e.name}: ${message.status === 'complete' ? 'message received' : message.error || message.status}`, message.id);
     };
     void run(); return { conversationId: cid, messageId: reply.id };
@@ -170,7 +214,7 @@ export class Engine {
     else Object.assign(p, { name: data.name, kind: data.kind, baseUrl: data.baseUrl, enabled: data.enabled, status: 'untested', error: undefined, ...(data.model ? { models: [...new Set([data.model, ...p.models])] } : {}) });
     const secret = this.store.secret(p.id); if (data.apiKey) secret.apiKey = data.apiKey; if (data.headers) secret.headers = data.headers;
     this.store.setSecret(p.id, secret); p.hasSecret = !!secret.apiKey;
-    if (!p.enabled) for (const [key, run] of this.running) { const employee = this.s.employees.find(e => e.id === run.employeeId); if (employee?.providerId === p.id) { run.controller.abort(); employee.state = 'blocked'; employee.bubble = '! Provider disabled'; employee.bubbleUntil = Date.now() + 15000; const task = this.s.tasks.find(t => t.id === key); if (task) { task.status = 'CANCELLED'; task.error = 'Provider disabled'; task.completedAt = now(); } } }
+    if (!p.enabled) for (const [key, run] of this.running) { const employee = this.s.employees.find(e => e.id === run.employeeId); if (employee && run.providerId === p.id) { run.controller.abort(); employee.state = 'blocked'; employee.bubble = '! Provider disabled'; employee.bubbleUntil = Date.now() + 15000; const task = this.s.tasks.find(t => t.id === key); if (task) { task.status = 'CANCELLED'; task.error = 'Provider disabled'; task.completedAt = now(); } } }
     this.emit('world.changed', `${p.name} configuration saved.`, p.id); return p;
   }
   async testProvider(providerId: string) {
@@ -181,6 +225,8 @@ export class Engine {
   reportAction(reportId: string, action: string, instructions = '') {
     const r = this.s.reports.find(r => r.id === reportId); if (!r) throw new GameError('Report not found', 404);
     if (action === 'approve') r.approved = true;
+    else if (action === 'archive') r.archived = true;
+    else if (action === 'followup') { if (!instructions.trim()) throw new GameError('Enter follow-up instructions'); const old = this.s.tasks.find(t => t.id === r.taskId)!; this.task({ ...old, title: `Follow-up: ${old.title}`.slice(0, 160), instructions: `${instructions}\n\nReference report:\n${r.text.slice(0, 18000)}` }); }
     else if (action === 'revise') { const old = this.s.tasks.find(t => t.id === r.taskId)!; this.task({ ...old, title: `Revision: ${old.title}`.slice(0, 160), instructions: `${instructions}\n\nPrevious report:\n${r.text.slice(0, 20000)}` }); }
     else if (action !== 'read') throw new GameError('Unknown report action');
     r.delivered = true; const e = this.employee(r.employeeId, false); if (e.reportId === r.id) { e.reportId = undefined; if (e.employmentStatus === 'active') { e.state = 'idle'; e.destination = { ...e.home }; } }
@@ -222,29 +268,82 @@ export class Engine {
     const m = this.s.meetings.find(m => m.id === meetingId), action = m?.actions[index]; if (!action || action.taskId) throw new GameError('Action unavailable or already assigned');
     const task = this.task({ employeeId: action.employeeId, title: action.title, instructions: `${action.title}\nMeeting context:\n${m!.summary}` }); action.taskId = task.id; this.save(); return task;
   }
-  combat(employeeId: string, weapon: Weapon) {
-    const e = this.employee(employeeId), settings = this.s.settings;
-    if (settings.violence === 'disabled' || (weapon === 'rifle' && settings.violence !== 'full')) throw new GameError('This action is disabled in Gameplay settings');
-    if (weapon !== this.s.player.equipped) throw new GameError('Equip that item first');
-    if (distance(e.position, this.s.player) > (weapon === 'rifle' ? 200 : weapon === 'whip' ? 80 : 56)) throw new GameError('No employee in range');
-    const steps = Math.ceil(distance(e.position, this.s.player) / 6);
-    for (let i = 1; i < steps; i++) if (!canStand({ x: this.s.player.x + (e.position.x - this.s.player.x) * i / steps, y: this.s.player.y + (e.position.y - this.s.player.y) * i / steps }, 1)) throw new GameError('Furniture or a wall blocks this action');
-    if (Date.now() - (this.attacks.get(e.id) || 0) < 500) throw new GameError('Wait for the action animation'); this.attacks.set(e.id, Date.now());
-    e.morale = Math.max(0, e.morale - 12); e.relationship = Math.max(0, e.relationship - 15); e.stress = Math.min(100, e.stress + 15); this.s.company.chaos++;
-    this.s.incidents.push({ id: id(), employeeId, weapon, text: weapon === 'rifle' ? 'Terminal breach of the employee retention policy.' : 'Unscheduled team-impact exercise. HR is taking notes.', createdAt: now() });
-    if (weapon === 'rifle') {
-      for (const colleague of this.s.employees.filter(a => a.employmentStatus === 'active')) { colleague.morale = Math.max(0, colleague.morale - 20); colleague.stress = Math.min(100, colleague.stress + 20); }
-      this.endEmployment(employeeId, 'deceased');
-    } else { e.hurtUntil = Date.now() + 1700; const d = Math.max(1, distance(e.position, this.s.player)); e.position = moveWithCollision(e.position, (e.position.x - this.s.player.x) / d * 10, (e.position.y - this.s.player.y) / d * 10); this.paths.delete(e.id); e.bubble = e.relationship < 20 ? 'I should update my résumé.' : 'Seriously? HR is RIGHT THERE.'; e.bubbleUntil = Date.now() + 5500; this.emit('combat.hit', `${e.name}: ${e.bubble}`, employeeId); }
-    return e;
+  private damageEmployee(e: Employee, damage: number, weapon: Weapon, origin: Point, device = false) {
+    const before = e.currentHp;
+    const nonlethal = this.s.settings.violence !== 'full' || weapon === 'hand' && !device;
+    e.currentHp = Math.max(nonlethal ? 1 : 0, e.currentHp - damage); e.damagedAt = this.clock(); e.hurtUntil = this.clock() + 220;
+    e.morale = Math.max(0, e.morale - 4); e.relationship = Math.max(0, e.relationship - 5); e.stress = Math.min(100, e.stress + 5); e.productivity = Math.max(10, 100 - Math.round(e.stress * .6));
+    if (!device) { this.s.company.chaos++; this.s.incidents.push({ id: id(), employeeId: e.id, weapon, text: `${weapons[weapon].name}: ${before - e.currentHp} HP lost. HR requests less hands-on leadership.`, createdAt: now() }); }
+    if (!e.currentHp) {
+      for (const colleague of this.s.employees.filter(a => a.employmentStatus === 'active' && a.id !== e.id)) { colleague.morale = Math.max(0, colleague.morale - 10); colleague.stress = Math.min(100, colleague.stress + 10); }
+      this.endEmployment(e.id, 'deceased');
+    } else {
+      if (!device && !e.tortureId) { const d = Math.max(1, distance(e.position, origin)); e.position = moveWithCollision(e.position, (e.position.x - origin.x) / d * (weapon === 'rifle' ? 5 : 9), (e.position.y - origin.y) / d * (weapon === 'rifle' ? 5 : 9)); this.paths.delete(e.id); }
+      e.bubble = e.relationship < 25 ? 'I should update my résumé.' : 'Seriously?! I have an HP bar now.'; e.bubbleUntil = this.clock() + 2500;
+      this.emit('combat.hit', `${e.name}: ${e.currentHp}/${e.maxHp} HP`, e.id, false);
+    }
+    return before - e.currentHp;
+  }
+  combat(input: { id: string; origin: Point; direction: number; weapon: Weapon }) {
+    const spec = weapons[input.weapon], time = this.clock();
+    if (this.s.settings.violence === 'disabled') throw new GameError('Combat disabled in Gameplay settings');
+    if (!spec || input.weapon !== this.s.player.equipped) throw new GameError('Equip that item first');
+    if (!Number.isInteger(input.direction) || input.direction < 0 || input.direction > 3 || !canStand(input.origin) || distance(input.origin, this.s.player) > 128) throw new GameError('Invalid attack position or direction');
+    if (this.attackIds.has(input.id)) throw new GameError('Attack already processed', 409);
+    if (time - this.lastAttackAt < spec.cooldown - 8) throw new GameError('Weapon cooling down', 429);
+    this.lastAttackAt = time; this.attackIds.add(input.id); if (this.attackIds.size > 256) this.attackIds.delete(this.attackIds.values().next().value!);
+    Object.assign(this.s.player, input.origin);
+    const hit = traceAttack(input.origin, input.direction, input.weapon, this.s.employees);
+    const event: AttackEvent = { ...input, ...hit, damage: 0, killed: false, at: time, source: 'player' };
+    if (hit.employeeId) { const e = this.employee(hit.employeeId); event.damage = this.damageEmployee(e, this.s.settings.weaponDamage[input.weapon], input.weapon, input.origin); event.killed = e.employmentStatus === 'deceased'; }
+    this.bus.emit('message', { type: 'combat.fx', attack: event } satisfies ServerEvent);
+    if (hit.employeeId) this.save(); return event;
+  }
+  startTorture(employeeId: string, method: PunishmentMethod, intensity = 1) {
+    if (this.s.settings.violence === 'disabled') throw new GameError('Torture devices are disabled in Gameplay settings');
+    const e = this.employee(employeeId);
+    if (this.s.tortureSessions.some(s => ['walking', 'active', 'paused'].includes(s.status) || s.status === 'deceased' && this.employee(s.employeeId, false).corpsePresent)) throw new GameError('Room occupied. Release employee or resolve the body first.');
+    if (!punishments[method] || intensity < .5 || intensity > 2) throw new GameError('Invalid machine configuration');
+    this.interrupt(e, 'assigned to torture room');
+    const session: TortureSession = { id: id(), employeeId, method, intensity, status: 'walking', nextPulseAt: this.clock() + punishments[method].interval, pulses: 0, damageDealt: 0, createdAt: now() };
+    this.s.tortureSessions.push(session); e.tortureId = session.id; e.state = 'walking'; e.destination = { ...punishmentSpot }; e.bubble = 'This is not the training room, is it?'; e.bubbleUntil = this.clock() + 7000;
+    this.s.incidents.push({ id: id(), employeeId, weapon: punishments[method].weapon, tortureSessionId: session.id, text: `Assigned to ${punishments[method].name}. Active work interrupted.`, createdAt: now() }); this.s.company.chaos++;
+    this.emit('torture.started', `${e.name} is walking to the torture room.`, e.id); return session;
+  }
+  tortureAction(sessionId: string, action: 'pause' | 'resume' | 'release' | 'configure', method?: PunishmentMethod, intensity?: number) {
+    const session = this.s.tortureSessions.find(s => s.id === sessionId); if (!session || ['released', 'deceased'].includes(session.status)) throw new GameError('Machine session is no longer active'); const e = this.employee(session.employeeId);
+    if (action === 'configure') { if (method) session.method = method; if (intensity !== undefined) session.intensity = intensity; }
+    else if (action === 'pause') session.status = 'paused';
+    else if (action === 'resume') { if (this.s.settings.violence === 'disabled') throw new GameError('Devices disabled by Gameplay settings'); session.status = distance(e.position, punishmentSpot) < 8 ? 'active' : 'walking'; }
+    else { session.status = 'released'; session.endedAt = now(); e.tortureId = undefined; e.hurtUntil = undefined; e.state = 'idle'; e.destination = { ...e.home }; this.paths.delete(e.id); }
+    session.nextPulseAt = this.clock() + punishments[session.method].interval;
+    this.s.incidents.push({ id: id(), employeeId: e.id, weapon: punishments[session.method].weapon, tortureSessionId: session.id, text: `${punishments[session.method].name}: ${action}${intensity ? `, intensity ${intensity}×` : ''}.`, createdAt: now() });
+    this.emit('torture.stopped', `${e.name}: machine ${action}.`, e.id); return session;
+  }
+  private tickTorture(time: number) {
+    for (const session of this.s.tortureSessions) {
+      if (!['walking', 'active', 'paused'].includes(session.status)) continue;
+      const e = this.employee(session.employeeId, false);
+      if (e.employmentStatus !== 'active') continue;
+      if (this.s.settings.violence === 'disabled' && session.status !== 'paused') { session.status = 'paused'; this.emit('torture.stopped', 'All devices stopped: violence is off.', session.id); }
+      if (distance(e.position, punishmentSpot) < 8) { e.state = 'torture'; if (session.status === 'walking') { session.status = 'active'; session.nextPulseAt = time + punishments[session.method].interval; this.save(); this.snapshot(true); } }
+      if (session.status !== 'active' || time < session.nextPulseAt) continue;
+      const method = punishments[session.method]; session.nextPulseAt = time + method.interval; session.pulses++;
+      e.morale = Math.max(0, e.morale - method.morale); e.stress = Math.min(100, e.stress + method.stress); e.energy = Math.max(0, e.energy - method.energy);
+      const origin = { x: e.position.x, y: e.position.y - 30 }; const damage = method.damage ? this.damageEmployee(e, Math.max(1, Math.round(method.damage * session.intensity)), method.weapon, origin, true) : 0;
+      session.damageDealt += damage; e.productivity = Math.max(10, 100 - Math.round(e.stress * .6));
+      if (!method.damage) { e.bubble = 'Could this have been an email?'; e.bubbleUntil = time + 2000; }
+      const attack: AttackEvent = { id: id(), origin, end: { ...e.position }, direction: 0, weapon: method.weapon, employeeId: e.id, damage, killed: e.currentHp === 0, at: time, source: session.method };
+      this.bus.emit('message', { type: 'combat.fx', attack } satisfies ServerEvent); this.save(); this.snapshot(true);
+    }
   }
   tick(delta = .1) {
-    const time = Date.now(); this.dispatch();
+    const time = this.clock(); if (time - this.lastScheduleTick >= 1000) { this.lastScheduleTick = time; this.scheduler.tick(time); } this.dispatch();
     for (const e of this.s.employees) {
       if (e.employmentStatus === 'deceased' || (e.employmentStatus !== 'active' && e.state !== 'leaving')) continue;
       if ((this.holds.get(e.id) || 0) > time || (e.hurtUntil || 0) > time) continue;
       const index = this.s.employees.indexOf(e);
-      if (e.following || e.reportId) {
+      if (!e.tortureId && (e.following || e.reportId)) {
         if (distance(e.position, this.s.player) > 60) e.destination = nearbyWalkable(this.s.player, index);
         else if (e.reportId) { e.state = 'report'; e.bubble = '! Boss, the report is ready.'; e.bubbleUntil = time + 2000; }
       }
@@ -262,19 +361,21 @@ export class Engine {
         if (e.employmentStatus === 'active') e.state = e.reportId ? 'report' : e.following ? 'following' : 'walking';
       } else {
         if (e.state === 'leaving') { e.state = 'idle'; continue; }
+        if (e.tortureId) { e.state = 'torture'; continue; }
         const task = this.s.tasks.find(t => t.employeeId === e.id && t.status === 'WALKING_TO_WORKSTATION'); if (task) { void this.runTask(task); continue; }
         if (e.state === 'walking') { const coffee = e.destination.x === 136 && e.destination.y === 704; if (coffee) e.energy = Math.min(100, e.energy + 15); e.state = this.s.meetings.some(m => m.status === 'gathering' && m.attendeeIds.includes(e.id)) ? 'meeting' : coffee ? 'coffee' : 'idle'; }
       }
     }
+    this.tickTorture(time);
     for (const m of this.s.meetings) if (m.status === 'gathering' && m.attendeeIds.every((eid, i) => distance(this.employee(eid).position, meetingSpots[i]) < 10)) void this.runMeeting(m);
     if (time - this.lastIdle > 14000) {
       this.lastIdle = time;
-      const idle = this.s.employees.filter(e => e.employmentStatus === 'active' && ['idle', 'coffee'].includes(e.state) && !e.following && !e.reportId && !this.s.tasks.some(t => t.employeeId === e.id && !terminalTasks.includes(t.status)));
+      const idle = this.s.employees.filter(e => e.employmentStatus === 'active' && !e.tortureId && ['idle', 'coffee'].includes(e.state) && !e.following && !e.reportId && !this.s.tasks.some(t => t.employeeId === e.id && !terminalTasks.includes(t.status)));
       const e = idle[Math.floor(Math.random() * idle.length)];
       if (e) { const away = distance(e.position, e.home) > 30; e.destination = away ? { ...e.home } : Math.random() < .5 ? { x: 136, y: 704 } : { x: 232, y: 744 }; e.state = 'walking'; e.bubble = away ? 'Back to it.' : 'Coffee. Critical infrastructure.'; e.bubbleUntil = time + 4000; }
     }
     if (time - this.lastSave > 5000) { this.lastSave = time; this.save(); }
     if (Date.now() - this.lastSnapshot > 150) { this.lastSnapshot = Date.now(); this.bus.emit('message', { type: 'world.tick', employees: this.s.employees.map(({ id, position, destination, state, bubble, bubbleUntil }) => ({ id, position, destination, state, bubble, bubbleUntil })), savedAt: this.s.savedAt } satisfies ServerEvent); }
   }
-  stop() { this.stopped = true; for (const run of this.running.values()) run.controller.abort(); this.store.close(); }
+  stop() { this.stopped = true; for (const meeting of this.s.meetings) if (['gathering', 'running'].includes(meeting.status)) { meeting.status = 'failed'; meeting.error = 'Server stopped during meeting'; } for (const run of this.running.values()) run.controller.abort(); this.store.close(); }
 }

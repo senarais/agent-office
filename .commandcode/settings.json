@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Shell(which cmd command-code commandcode 2>&1; echo \"---version---\"; cmd --version 2>&1 | head -5; echo \"---models---\"; timeout 60 cmd --list-models 2>&1 | head -40)"
+    ],
+    "deny": [],
+    "defaultMode": "default"
+  }
+}

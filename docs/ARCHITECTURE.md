@@ -1,5 +1,19 @@
 # Architecture
 
+## Revision 2 systems
+
+`apps/server/src/scheduler.ts` contains the single-writer scheduler. `cron-parser` handles calendar/timezone arithmetic; intervals use a stable creation-time anchor. The 100 ms engine tick polls schedules once per second. A schedule occurrence, its task and advanced next-run pointer are saved in the same SQLite snapshot before dispatch. Occurrence keys prevent duplicate restart delivery; Supabase enforces the same `(recurring_task_id, scheduled_at)` uniqueness. No overlapping run per definition; after downtime, one overdue run is coalesced rather than flooding providers. Retries are bounded and never undo deliberate task pauses/cancellations or silently repeat interrupted server-restart requests.
+
+`packages/shared/src/automation.ts` defines schedules, runs and frozen per-task delivery metadata. One-time/daily/weekly/interval/cron definitions support explicit provider/model, tool subset, timezone, output destination, notify/physical-delivery flags and retry policy. Logs retain errors and attempts. Template replacements create new schedule IDs and disable old definitions. Archived reports remain durable; follow-up tasks are normal manual assignments.
+
+`packages/shared/src/combat.ts` defines tunable default weapons, direction vectors, wall-occluded hitscan/melee, and seven machine recipes. SPACE predicts only audiovisual feedback; the server owns cooldowns, replay protection, HP damage and death. No target lock is required. `CombatEffects.ts` uses 240 reusable square particles, 48 capped trails, short hit-stop and layered effects. Blood is small/non-graphic and suppressed by Reduced/Off or the independent blood toggle.
+
+Employee records now persist max/current HP, productivity flavor, damage time, corpse presence, death time and predecessor/replacement links. `deceased` retains an unresolved roster position and visible lying actor. Firing is a separate action. Resurrection restores the same employee; similar/new replacements create fresh identities. Healing consumes stock and cannot resurrect. Deceased/terminated/confined employees cannot execute agents.
+
+The torture room is carved from the bottom of the old boss-office footprint; map size remains 1280×832. Printer moves beside Operations. A persisted session owns the single rig: walking → active ↔ paused → released/deceased. Arrival starts the chosen machine. Pulses change real game stats and emit effect events; stop/release/violence-Off halt damage. Server restart resets the next pulse, so there is no accumulated offline punishment. Unresolved bodies keep the rig occupied until resolved.
+
+`migrate-state.ts` upgrades version-1 snapshots additively without discarding staff, conversations, provider IDs or historical deaths. Supabase revision migration adds three tables and generated HP/corpse fields. Replica writes are ordered provider → employee → schedule → task → run/session → dependent records. Secrets remain in the encrypted local vault; Vite's deny list also prevents serving the vault, key, saves and backups over HTTP.
+
 ## One game, one local server
 
 ```text
@@ -12,7 +26,8 @@ Pixel React overlays ← Zustand snapshot/event bridge
 Loopback Fastify API → Engine → provider adapter
         ↓              ↓         ├─ official OpenAI SDK
 SQLite / AES-GCM vault  NPC tick  ├─ official OpenCode SDK
-        ↓                        └─ OpenAI-compatible SDK client
+        ↓                        ├─ local Command Code CLI (headless child process)
+                                 └─ OpenAI-compatible SDK client
 Optional Supabase REST replica
 ```
 
@@ -59,7 +74,7 @@ There is no artificial percent-progress counter. Arrival at an assigned workstat
 
 Provider interface: `listModels()` (also connection health check) and `execute()` with an abort signal, model, system/context, messages, selected tools, session callback, text callback and activity callback. Execution returns authoritative output and optional usage. Provider-specific conversation creation, cancellation and event subscription occur inside the adapter rather than unnecessary no-op interface methods.
 
-OpenCode tool events map to reading/terminal/working/waiting. Permission requests are surfaced but approval stays in the attached OpenCode client. Text-only OpenAI-compatible employees cannot claim to execute filesystem tools.
+OpenCode tool events map to reading/terminal/working/waiting. Permission requests are surfaced but approval stays in the attached OpenCode client. Text-only OpenAI-compatible employees cannot claim to execute filesystem tools. The Command Code adapter spawns the local `cmd` CLI headlessly, maps its NDJSON text/tool events, persists the returned session id for `--resume`, and terminates the child process on cancel; granting `bash`/`write`/`edit` runs that assignment with the CLI’s non-interactive bypass.
 
 Pausing is explicitly cancel-and-preserve-context, not native suspension. Clarification is saved for the next retry/turn. Report revision creates a new task with original output as context. Interrupted server restarts require explicit retry to prevent duplicate paid/external work.
 
@@ -82,8 +97,8 @@ Optional Supabase replication writes queryable entity tables, then complete `off
 - Zod validates mutable payloads. No provider keys in world snapshots, browser storage or Vite variables.
 - AES-256-GCM vault with restricted directory/key permissions. This protects copied database files; it does not protect against an attacker with access to both local vault and key.
 - Provider base URLs are intentionally user-selectable local/HTTP(S) endpoints; reject URL credentials/query/fragments. API does not read arbitrary server files.
-- Code/runtime filesystem access belongs to explicitly connected OpenCode and selected tools.
-- Every execution validates active employment. Firing/death abort requests, cancel queued/running tasks and preserve history.
+- Code/runtime filesystem access belongs to explicitly connected OpenCode / Command Code CLI and selected tools.
+- Every execution validates active employment and room availability. Firing/death/confinement abort requests, cancel queued/running tasks and preserve history. Running requests remember their actual provider ID, including schedule overrides, so disabling that connection cancels the correct request.
 
 ## Art/audio and map interoperability
 

@@ -1,5 +1,20 @@
 # Verification and regression checks
 
+## Revision 2 checks
+
+`npm test` now runs `core.test.ts` and `revision.test.ts`. Current suite: 36 checks covering the original flows plus timezone/DST scheduling, exact due boundaries, interval phase, downtime coalescing, occurrence deduplication, CRUD/overlap, bounded retry, deliberate-pause protection, provider overrides, reports/archive/follow-up, directional empty-space combat/cooldown/occlusion, multi-hit HP, healing, persistent bodies/resurrection/replacement, seven machine methods, stop/release/restart persistence, additive legacy-save migration and authoritative NPC interaction acknowledgments.
+
+`revision.spec.ts` adds browser flows that deliberately delay combat HTTP responses to verify feedback is immediate, hold SPACE to verify bounded autofire, inspect actual world HP bars/blood counters/body sprites, reload a corpse, exercise healing/resurrection/similar/new replacement, run a real server-scheduled fixture task while the page is `about:blank`, review its report, and test persistent machine control. A separate HTTP test verifies Vite refuses vault/SQLite files. Test servers explicitly disable Supabase replication so fixtures cannot alter a configured real project.
+
+New SQL verification:
+
+```bash
+psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/migrations/20261006213943_scheduler_combat_and_torture.sql
+psql "$TEST_DATABASE_URL" -v ON_ERROR_STOP=1 -f tests/revision-database-check.sql
+```
+
+Apply the original migration first on a new test database. The revision check rolls back sample data and validates HP/corpse invariants, resurrection, schedule/task/run relations, duplicate-occurrence rejection, device sessions/incidents and private RLS.
+
 ## Backend and shared logic
 
 ```bash
@@ -34,7 +49,7 @@ Tests use isolated backend/frontend ports 3101/5175, unique temporary saves, and
 
 Browser journey checks actual WASD movement/collision and physical pathfinding to HR, IT and colleagues; HR creation/spawn; provider setup/model assignment; real backend task orchestration through the test adapter; report approach/read/approval; streamed chat; player/employee appearance; actual music playback and jukebox track change/mute; nonlethal punch; persistent firearm death across reload; replacement hire and firing/exit. Separate checks cover a physical two-employee meeting, persisted minutes, editable whiteboard goals, boss-computer apps/analytics, and a 390px viewport without outside-page scrolling.
 
-Tests call the scene's normal `walkTo` method to automate long journeys. It follows the same A*/movement/collision route as mouse clicks, not teleportation. Forms and interactions use real keyboard/click input.
+Tests call the scene's normal `walkTo` and `approachEmployee` methods to automate long journeys. These use the same A*/movement/collision and live NPC pursuit as canvas clicks, not teleportation. Nearby NPCs are held at the acknowledged server position before automatic dialogue opens. Keyboard E interactions, forms and combat use actual keyboard/click input.
 
 Failure traces/screenshots: `test-results/`. Example screenshots: `docs/screenshots/`. Tests listen for uncaught browser errors. The full journey runs about 70–90 seconds on the development machine.
 

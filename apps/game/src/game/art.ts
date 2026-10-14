@@ -33,7 +33,7 @@ export function createOfficeArt(scene: Phaser.Scene) {
     for (let y = 80; y < 816; y += 16) for (let x = 32; x < 1248; x += 48) { const off = y % 32 ? 24 : 0; rect(c, ['#b49b72', '#af9670', '#bba37b', '#b39c76'][(x / 16 + y / 16) % 4], x + off, y, Math.min(47, 1248 - x - off), 15); rect(c, '#dcc29255', x + off + 7, y + 5, 24, 1); }
     rect(c, '#65755b33', 32, 354, 1216, 84);
     for (let x = 64; x < 1240; x += 32) { rect(c, '#e8d5a44a', x, 368, 6, 2); rect(c, '#e8d5a44a', x, 424, 6, 2); }
-    for (const room of rooms) rug(c, room.x + 34, room.y + 92, room.w - 68, room.h - 124, room.color);
+    for (const room of rooms) { if (room.id === 'torture') { rect(c, '#4c5652', room.x, room.y, room.w, room.h); rug(c, room.x + 12, room.y + 16, room.w - 24, room.h - 34, room.color); for (let x = room.x; x < room.x + room.w; x += 16) rect(c, x % 32 ? '#c7ad6f' : '#3c4140', x, room.y - 4, 10, 5); } else rug(c, room.x + 34, room.y + 92, room.w - 68, room.h - 124, room.color); }
     for (const w of walls) { rect(c, '#24392d30', w.x + 5, w.y + 6, w.w, w.h + 4); rect(c, '#3c584a', w.x, w.y - 20, w.w, w.h + 20); rect(c, '#8ea189', w.x, w.y - 23, w.w, 5); rect(c, '#627e65', w.x, w.y - 18, w.w, 5); }
     for (const x of [104, 416, 736, 1112]) { rect(c, '#293e39', x - 4, 57, 100, 49); rect(c, '#b8cec0', x, 60, 92, 37); rect(c, '#87aaa0', x, 80, 92, 17); for (let i = 0; i < 80; i += 14) rect(c, '#709488', x + i, 76 + i % 9, 11, 21 - i % 9); rect(c, '#e2dbc0', x + 43, 60, 4, 39); rect(c, '#e2dbc0', x, 77, 92, 3); rect(c, '#ddd4b3', x - 6, 100, 104, 5); }
     rect(c, '#20392d', 360, 7, 560, 36); rect(c, '#7e9477', 360, 7, 560, 3); rect(c, '#c1d69b', 372, 14, 37, 24); text(c, 'PT', 379, 32, 17, '#293f30'); text(c, 'ABISENA RAIS JAYA', 424, 32, 19); text(c, 'BUILDING COMPANIES, ONE AGENT AT A TIME.', 428, 52, 8, '#bdd0a8');
@@ -43,7 +43,7 @@ export function createOfficeArt(scene: Phaser.Scene) {
     rect(c, '#334c3d', 1056, 461, 126, 32); text(c, 'PT / DIRECTOR', 1067, 481, 9, '#e6d29b');
     rect(c, '#e0d6b5', 283, 84, 24, 24); rect(c, '#445847', 295, 88, 2, 11); rect(c, '#445847', 291, 98, 6, 2);
     text(c, 'WELCOME, GOOD HUMAN.', 533, 778, 9, '#394b3c'); text(c, 'EXIT →', 1162, 795, 10, '#425543');
-    for (const room of rooms) text(c, room.name, room.x + 20, room.y + room.h - (room.y === 80 ? 35 : 15), 9, '#3d5142');
+    for (const room of rooms) text(c, room.name, room.x + 20, room.y + room.h - (room.y === 80 ? 35 : 15), room.id === 'torture' ? 7 : 9, room.id === 'torture' ? '#dac7a1' : '#3d5142');
   });
   for (const f of furniture) furnitureTexture(scene, f);
 }
@@ -66,6 +66,12 @@ function furnitureTexture(scene: Phaser.Scene, f: Furniture) {
       rect(c, '#5b5842', x + 10, y + h - 10, 6, 16); rect(c, '#5b5842', x + w - 16, y + h - 10, 6, 16); rect(c, '#927249', x, y - 8, w, h); rect(c, '#cbaa79', x, y - 13, w, h - 1); rect(c, '#debe8b', x + 3, y - 10, w - 6, 3); for (let i = 0; i < 3; i++) { rect(c, '#dfd7b9', x + 18 + i * 43, y + 10, 23, 19); rect(c, '#788f7e', x + 21 + i * 43, y + 14, 15, 2); } text(c, 'PT', x + w / 2 - 9, y + 52, 15, '#715d42');
     } else if (f.kind === 'server') {
       rect(c, '#283f41', x, y - 31, w, h + 28); rect(c, '#63807b', x + 3, y - 28, w - 6, 4); for (let row = 0; row < 6; row++) { rect(c, '#47615e', x + 5, y - 17 + row * 11, w - 10, 9); rect(c, '#9bbb77', x + 9, y - 15 + row * 11, 3, 3); rect(c, '#7db8ad', x + 15, y - 15 + row * 11, 3, 3); rect(c, '#20383d', x + 27, y - 15 + row * 11, w - 37, 3); }
+    } else if (f.kind === 'rig') {
+      rect(c, '#283d3c', x, y - 28, 7, h + 29); rect(c, '#283d3c', x + w - 7, y - 28, 7, h + 29); rect(c, '#8c9b90', x, y - 29, w, 6);
+      rect(c, '#ac7566', x + 5, y - 18, 17, 14); rect(c, '#d1997b', x + 7, y - 20, 14, 5); rect(c, '#b7cfc5', x + 49, y - 21, 3, 17);
+      rect(c, '#b49b68', x + 25, y - 2, 23, 25); rect(c, '#526f68', x + 28, y + 2, 17, 18); rect(c, '#8da393', x + 21, y + 23, 31, 8);
+      rect(c, '#2b4340', x + 30, y + 29, 4, 8); rect(c, '#2b4340', x + 43, y + 29, 4, 8);
+      rect(c, '#d3bf81', x + 27, y - 23, 17, 8); text(c, 'HR', x + 30, y - 17, 6, '#3c4b36');
     } else if (f.kind === 'board') {
       rect(c, '#5c5d46', x + 9, y, 4, h + 10); rect(c, '#5c5d46', x + w - 13, y, 4, h + 10); rect(c, '#6f775d', x, y - 35, w, 51); rect(c, '#e0d8b5', x + 4, y - 31, w - 8, 43);
       text(c, f.id === 'projector' ? 'PT / MEETINGS' : 'GOOD THINGS, DONE.', x + 10, y - 18, 7, '#476451'); for (let i = 0; i < 4; i++) { rect(c, ['#a8be94', '#dab883', '#cd9f8c', '#8ba9a0'][i], x + 10 + i * 29, y - 8, 22, 15); rect(c, '#66745366', x + 13 + i * 29, y - 4, 14, 2); }

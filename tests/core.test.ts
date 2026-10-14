@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { randomUUID } from 'node:crypto';
 import { Store } from '../apps/server/src/database';
 import { Engine } from '../apps/server/src/engine';
 import { createApp } from '../apps/server/src/api';
@@ -14,6 +15,7 @@ import type { ProviderConfig } from '../packages/shared/src/types';
 import { canStand, distance, findPath, furniture, meetingSpots, moveWithCollision, spawn, workstations } from '../packages/shared/src/world';
 
 const profile = { name: 'Nisa', role: 'Research Analyst', department: 'Research', appearance: defaultAppearance };
+delete process.env.SUPABASE_URL; delete process.env.SUPABASE_SERVICE_ROLE_KEY;
 const fixture = () => { const dir = mkdtempSync(join(tmpdir(), 'pt-office-test-')); const engine = new Engine(new Store(dir)); return { dir, engine, close: () => { engine.stop(); rmSync(dir, { recursive: true, force: true }); } }; };
 async function eventually(check: () => boolean, timeout = 8000) { const start = Date.now(); while (!check()) { if (Date.now() - start > timeout) assert.fail('Condition timed out'); await new Promise(r => setTimeout(r, 15)); } }
 
@@ -85,21 +87,61 @@ test('OpenCode SDK adapter uses sessions, selected model, tool allowlist, stream
   finally { for (const event of events) event.end(); server.closeAllConnections(); await new Promise<void>(r => server.close(() => r())); }
 });
 
-test('death and firing interrupt execution permanently; punches never kill', async () => {
+test('Command Code CLI adapter lists models, streams NDJSON, resumes sessions, enables tools and aborts', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pt-commandcode-')); const script = join(dir, 'cmd.mjs'); const capture = join(dir, 'capture.json');
+  writeFileSync(script, `#!/usr/bin/env node
+import { writeFileSync } from 'node:fs';
+const args = process.argv.slice(2);
+if (args.includes('--list-models')) { process.stdout.write('Available models  ·  2 models\\n\\nOpen Source\\n\\nlocal/coder               a coder\\nclaude-sonnet-4-6         frontier coding\\n'); process.exit(0); }
+let input = ''; process.stdin.on('data', chunk => input += chunk); process.stdin.on('end', () => {
+  if (input.includes('slow')) { setInterval(() => {}, 1000); return; }
+  writeFileSync(process.env.CC_CAPTURE, JSON.stringify({ argv: args, stdin: input }));
+  const frame = value => process.stdout.write(JSON.stringify(value) + '\\n');
+  frame({ type: 'event', event: { type: 'run_start', sessionId: 'cc-session-1' } });
+  frame({ type: 'event', event: { type: 'text_delta', delta: 'Command ' } });
+  frame({ type: 'event', event: { type: 'tool_running', toolName: 'read_file', description: 'reading' } });
+  frame({ type: 'event', event: { type: 'text_delta', delta: 'Code result' } });
+  frame({ type: 'result', subtype: 'success', sessionId: 'cc-session-1', usage: { inputTokens: 12, outputTokens: 5 }, finalText: 'Command Code result' });
+});\n`);
+  chmodSync(script, 0o755); process.env.CC_CAPTURE = capture;
+  const p: ProviderConfig = { id: 'cc', kind: 'commandcode', name: 'Command Code', baseUrl: script, enabled: true, models: [], status: 'untested', hasSecret: false };
+  const inspect = () => JSON.parse(readFileSync(capture, 'utf8')) as { argv: string[]; stdin: string };
+  try {
+    const adapter = createProvider(p, {}); assert.deepEqual(await adapter.listModels(), ['local/coder', 'claude-sonnet-4-6']);
+    let text = ''; let session = ''; const activity: string[] = [];
+    const result = await adapter.execute({ model: 'local/coder', system: 'SYSTEM PROMPT', messages: [{ role: 'user', content: 'Do work' }], signal: new AbortController().signal, tools: ['read'], onSession: s => session = s, onText: t => text += t, onActivity: (a, d) => activity.push(`${a}|${d}`) });
+    assert.equal(session, 'cc-session-1'); assert.equal(text, 'Command Code result'); assert.equal(result.text, 'Command Code result'); assert.equal(result.usage?.totalTokens, 17);
+    const meta = inspect();
+    assert.ok(meta.argv.includes('--model') && meta.argv.includes('local/coder')); assert.ok(!meta.argv.includes('--yolo')); assert.match(meta.stdin, /SYSTEM PROMPT/); assert.ok(activity.some(a => a.startsWith('reading|')));
+    await adapter.execute({ model: 'local/coder', sessionId: 'cc-session-1', system: 'ignored', messages: [{ role: 'user', content: 'again' }], signal: new AbortController().signal, tools: ['edit'], onSession: () => {}, onText: () => {}, onActivity: () => {} });
+    const meta2 = inspect();
+    assert.ok(meta2.argv.includes('--resume') && meta2.argv.includes('cc-session-1')); assert.ok(meta2.argv.includes('--yolo')); assert.equal(meta2.stdin, 'again');
+    const controller = new AbortController(); const slow = adapter.execute({ model: 'local/coder', system: 'x', messages: [{ role: 'user', content: 'slow' }], signal: controller.signal, tools: [], onSession: () => {}, onText: () => {}, onActivity: () => {} });
+    const rejected = assert.rejects(slow, /cancelled/i); await new Promise(r => setTimeout(r, 150)); controller.abort(); await rejected;
+    await assert.rejects(createProvider({ ...p, baseUrl: join(dir, 'missing-cmd') }, {}).listModels(), /not found/i);
+  } finally { delete process.env.CC_CAPTURE; rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('death and firing interrupt execution; multiple rifle hits create a persistent unresolved body', async (t) => {
   const f = fixture(); let wasAborted = false;
+  t.after(f.close); let clock = Date.now(); f.engine.clock = () => clock;
   const p = await f.engine.configureProvider({ kind: 'generic', name: 'Slow provider', baseUrl: 'http://127.0.0.1:1/v1', model: 'slow' });
   f.engine.providerFactory = () => ({ listModels: async () => ['slow'], execute: r => new Promise((_resolve, reject) => { r.signal.addEventListener('abort', () => { wasAborted = true; reject(new DOMException('Aborted', 'AbortError')); }); }) });
   const e = f.engine.hire({ ...profile, providerId: p.id, model: 'slow' }); e.position = { ...e.home }; f.engine.s.player.x = e.position.x - 32; f.engine.s.player.y = e.position.y;
   const task = f.engine.task({ employeeId: e.id, title: 'Long work', instructions: 'Wait for cancellation' }); f.engine.tick(.1); await eventually(() => f.engine.running.has(task.id));
-  f.engine.combat(e.id, 'hand'); assert.equal(e.employmentStatus, 'active'); assert.ok(e.morale < 85);
-  await new Promise(r => setTimeout(r, 510)); f.engine.s.player.equipped = 'rifle'; f.engine.combat(e.id, 'rifle'); assert.equal(e.employmentStatus, 'deceased'); assert.equal(task.status, 'CANCELLED'); assert.ok(wasAborted);
+  const hit = (weapon: 'hand' | 'rifle') => { clock += 1000; f.engine.s.player.equipped = weapon; return f.engine.combat({ id: randomUUID(), weapon, origin: { x: f.engine.s.player.x, y: f.engine.s.player.y }, direction: 3 }); };
+  hit('hand'); assert.equal(e.employmentStatus, 'active'); assert.ok(e.morale < 85);
+  hit('rifle'); assert.equal(e.employmentStatus, 'active'); assert.equal(e.currentHp, 69);
+  for (let i = 0; i < 3; i++) hit('rifle'); assert.equal(e.employmentStatus, 'deceased'); assert.equal(task.status, 'CANCELLED'); assert.ok(wasAborted); assert.equal(e.corpsePresent, true); assert.equal(e.endedAt, undefined);
   assert.throws(() => f.engine.chat(e.id, 'You cannot respond'), /deceased/); assert.throws(() => f.engine.task({ employeeId: e.id, title: 'No', instructions: 'No' }), /deceased/);
   const other = f.engine.hire({ ...profile, name: 'Bima' }); f.engine.endEmployment(other.id, 'fired'); assert.equal(other.state, 'leaving'); for (let i = 0; i < 150; i++) f.engine.tick(.1); assert.equal(other.state, 'idle');
-  await new Promise(r => setTimeout(r, 30)); const reload = new Store(f.dir); assert.equal(reload.state.employees[0].employmentStatus, 'deceased'); assert.equal(reload.state.employees[1].employmentStatus, 'fired'); assert.ok(reload.state.history.some(h => h.status === 'deceased')); reload.close(); f.close();
+  await new Promise(r => setTimeout(r, 30)); const reload = new Store(f.dir); assert.equal(reload.state.employees[0].employmentStatus, 'deceased'); assert.equal(reload.state.employees[0].corpsePresent, true); assert.equal(reload.state.employees[1].employmentStatus, 'fired'); assert.ok(reload.state.history.some(h => h.status === 'deceased')); reload.close();
 });
 
-test('violence accessibility settings enforced server-side', async () => {
-  const f = fixture(), e = f.engine.hire(profile); f.engine.s.player.x = e.position.x; f.engine.s.player.y = e.position.y; f.engine.s.settings.violence = 'disabled'; assert.throws(() => f.engine.combat(e.id, 'hand'), /disabled/); f.engine.s.settings.violence = 'slapstick'; f.engine.s.player.equipped = 'rifle'; assert.throws(() => f.engine.combat(e.id, 'rifle'), /disabled/); assert.equal(e.employmentStatus, 'active'); f.close();
+test('violence accessibility settings enforce Off and nonlethal Reduced mode server-side', async (t) => {
+  const f = fixture(); t.after(f.close); const e = f.engine.hire(profile); f.engine.s.player.x = e.position.x; f.engine.s.player.y = e.position.y; f.engine.s.settings.violence = 'disabled';
+  const shot = { id: randomUUID(), weapon: 'rifle' as const, origin: { ...e.position }, direction: 0 }; f.engine.s.player.equipped = 'rifle';
+  assert.throws(() => f.engine.combat(shot), /disabled/); f.engine.s.settings.violence = 'slapstick'; e.currentHp = 3; f.engine.combat(shot); assert.equal(e.currentHp, 1); assert.equal(e.employmentStatus, 'active');
 });
 
 test('task pause/cancel and restart recovery never silently re-execute', async () => {

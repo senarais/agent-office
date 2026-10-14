@@ -6,6 +6,16 @@ A full-screen top-down pixel office game. Walk to HR, hire a colleague, connect 
 
 ![The office](docs/screenshots/office.png)
 
+## Revision 2: automation and arcade gameplay
+
+**Recurring tasks are now implemented.** Boss laptop → **Recurring tasks** → **New recurring task**. Supports one-time, daily, weekly/weekday, interval and five-field cron schedules with IANA timezones, pause/resume/edit/delete, run history, bounded retry, provider/model selection and real report delivery. Also accessible through employee dialogue, HR and the whiteboard. [Scheduling guide](docs/RECURRING_TASKS.md).
+
+SPACE now attacks immediately in the facing direction, including empty-space rifle fire. Hold SPACE for automatic rifle fire. Employees have 100 HP: default rifle takes 4 hits, knife 6 and whip 10. Small optional blood pixels, health bars, recoil, hit-stop, layered SFX and persistent bodies are implemented.
+
+Death is **not automatic firing**. At a body or HR, choose **Resurrect / Fire without replacement / Replace similar / Replace completely new / Leave corpse for now**. Food/drinks restore living employees to full HP. A new compact torture room below the boss office contains seven configurable cartoon machines with persistent assignment, stop/release, stats and incidents. [Gameplay guide](docs/GAMEPLAY.md).
+
+Existing saves upgrade automatically without resetting staff or provider profiles. For an existing Supabase project, also apply `supabase/migrations/20261006213943_scheduler_combat_and_torture.sql` after the original migration. No new `.env` variables are needed for automation or gameplay.
+
 ## Quick start
 
 **Node.js 22.13+ required; Node 24 recommended.** Uses Node's built-in SQLite. No Docker required.
@@ -52,6 +62,8 @@ opencode serve --hostname 127.0.0.1 --port 4096
 
 Add **OpenCode server** at IT, base URL `http://127.0.0.1:4096`, test, choose a discovered `provider/model`, and grant employee tools in HR. Optional task project path selects an OpenCode workspace. OpenAI and compatible adapters are text-generation connections; they do not pretend to edit files or execute tools.
 
+Command Code's own CLI can be a provider too. Install and log in once (`npm i -g command-code`, `cmd login`), then add **Command Code CLI** at IT and test connection to list models. The server runs `cmd` headlessly, streams replies and tool activity, and resumes the CLI session. Granting `bash`/`write`/`edit` lets an assignment modify files; the CLI's `cmd login` is the only credential needed.
+
 Local/third-party endpoints: choose **OpenAI-compatible**, supply base URL (usually ending `/v1`), optional API key/custom headers and model.
 
 See [provider setup](docs/AGENT_PROVIDERS.md) for full instructions, cancellation and troubleshooting.
@@ -63,7 +75,7 @@ See [provider setup](docs/AGENT_PROVIDERS.md) for full instructions, cancellatio
 | WASD / arrows | Walk, default 6 tiles/sec |
 | Shift | Run, 8.75 tiles/sec |
 | E | Interact with nearest person/device |
-| Space | Equipped cartoon action; advance unfocused dialogue text |
+| Space | Immediate directional attack, with or without a target; hold for rifle autofire |
 | Esc | Pause/menu or close current window |
 | M | Mute/unmute |
 | Mouse | Click floor to walk; click object/person to approach and interact |
@@ -74,8 +86,9 @@ Typing disables movement. Core keys are remappable in **Esc → Controls**. Touc
 ## In-world systems
 
 - **Office:** research, developer desks, meeting room, IT, HR, creative/QA, open office/operations, pantry, lounge, boss office, reception, printer and whiteboard. Shared collision grid and A*; short corridors.
-- **Employees:** user-created profiles, modular appearance, five departments, tool permissions, morale/energy/relationship/stress, idle coffee trips, follow-me, firing and vacant positions. Capacity: 20 employees, four workstations per department.
+- **Employees:** user-created profiles, modular appearance, HP, five departments, tool permissions, morale/energy/relationship/stress/productivity, idle coffee trips, healing, resurrection, replacements and employment history. Capacity: 20 positions including unresolved deceased staff, four workstations per department.
 - **Tasks:** durable prioritized queues; real workstation arrival before execution; streamed output/tool activity; error details, retry, cancel, pause-as-cancel and saved clarifications; report delivery/revisions/approval.
+- **Recurring tasks:** server-side one-time/daily/weekly/interval/cron, timezone/DST, durable occurrence claims, no overlapping runs, bounded retry, history, pause/resume/edit/delete and selectable report output. Works with browser closed while server remains running.
 - **Chat:** persistent conversations, streaming, cancel, retry, new conversations and bounded model context.
 - **Meetings:** 1–6 available employees physically gather; sequential real-agent contributions; stored transcript, model-produced summary/decisions/actions; convert actions to real tasks.
 - **Boss computer:** pixel desktop with company, tasks, employees, reports, finance, analytics, meetings, network and settings. Analytics uses saved task/chat usage only; unknown counts/costs are marked unavailable.
@@ -83,7 +96,8 @@ Typing disables movement. Core keys are remappable in **Esc → Controls**. Touc
 - **Customization:** character layers, employee outfits, company motto, wall accents and lush/dormant plant palette.
 - **Audio:** licensed recorded music, functional jukebox, separate master/music/SFX/ambient/dialogue volumes, mute, shuffle and repeat.
 - **Options:** day/local-time/night, pixel scale, text scale, camera follow, rain, glow, CRT/scanlines, reduced motion, shake, damage flash, contrast and movement/text/animation speeds.
-- **Inventory/cartoon consequences:** coffee boost, hand/whip (always nonlethal), fictional rifle (persistent death), morale changes and HR incidents. Violence can be full/slapstick/disabled. Deceased/fired employees cannot execute agents; active work is interrupted.
+- **Inventory/cartoon consequences:** coffee boost, food/drink full healing, nonlethal fists, damaging whip/knife/rifle, morale changes and incidents. Full/Reduced/Off plus blood toggle. Bodies persist until explicit HR resolution; dead/terminated employees cannot execute agents.
+- **Torture room:** automatic whip, boxing glove, knife, target practice, fictional shock chair, endless meeting and paperwork treadmill; physical arrival, configurable intensity, stop/resume/release, persistent sessions, incidents and death resolution. No accumulated offline damage.
 
 ## Saves and secrets
 
@@ -91,7 +105,7 @@ State is stored server-side in **`.local-data/office.sqlite`**, not browser loca
 
 Provider keys, OpenCode password and custom headers use AES-256-GCM in a separate SQLite vault table. The generated key is `.local-data/vault.key` (or backend `VAULT_KEY`); directory/file permissions are restricted. Back up the **whole data directory with server stopped**, including key. Losing the key means re-entering provider credentials.
 
-The backend binds to loopback, validates Host/Origin, rejects cross-site requests, and requires a per-server session token for mutations. Browser receives provider metadata only. This is a trusted single-user local application, not a multi-user hosted service.
+The backend binds to loopback, validates Host/Origin, rejects cross-site requests, and requires a per-server session token for mutations. Browser receives provider metadata only. Vite explicitly blocks HTTP access to `.local-data`, `.test-data`, SQLite files, vault keys and environment files. This is a trusted single-user local application, not a multi-user hosted service.
 
 ### Optional Supabase
 
@@ -136,3 +150,4 @@ Canonical map is `packages/shared/src/world.ts`; `npm run map:export` refreshes 
 - OpenCode permission requests are surfaced; approve them in the OpenCode client attached to that server, or cancel in-game.
 - Real AI output depends on supplied credentials, provider/model capabilities and OpenCode permissions. Automated local HTTP/SDK protocol tests do not claim live credential verification.
 - Supabase is a single-writer replica/restore path, not conflict-resolving multi-machine synchronization.
+- Scheduled work needs the local server/computer/provider running. Downtime coalesces missed slots into one catch-up run. Task failures and unavailable employees are recorded, not replaced with generated fake results.

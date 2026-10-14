@@ -41,3 +41,53 @@ GitHub API did not report a code license. Inspected `server.py` routes, agent as
 - Audio provenance: `ASSETS.md` and `CREDITS.md`, independently verified per asset source.
 
 Initial decisions were recorded before major implementation in root `DEVELOPMENT_NOTES.md`.
+
+## Revision 2 research: characters, combat and effects
+
+Re-inspected the five office repositories before this revision. Their queue/state/event boundaries informed scheduled work sharing the real task pipeline; none were used as a dashboard-design template.
+
+### 6. kjenney / lpc-spritesheet-generator
+
+https://github.com/kjenney/lpc-spritesheet-generator
+
+Studied README, animation controls/info and renderer/customization layout: consistent directional cells, ordered modular appearance layers, action-specific frame timing and preview/export separation. Adopted conceptually for original character/equipment layering and attack/idle/work/hurt/dead poses. GitHub reports NOASSERTION despite an MIT badge in README; no source or sprites were copied, and no asset rights were inferred from that badge.
+
+### 7. nsetzer / lpc-spritesheets
+
+https://github.com/nsetzer/lpc-spritesheets
+
+Studied README and `lpcdb/sprites.py`: oversized weapon layers, slash/thrust framing, expanded backswing timing and separate sprite-credit requirements. Adopted the idea of equipment/action layers around the existing character proportions. Code metadata is GPL-3.0; artwork has per-file GPL/CC-BY-SA and attribution considerations. No code or assets imported; current sprites/knife/rifle/whip are independently drawn in the original office palette.
+
+### 8. minerva-studio / pixel-effect-generator
+
+https://github.com/minerva-studio/pixel-effect-generator
+
+Studied README and projectile/shared-effect organization: deterministic parameter-driven effects, short impact phases, square fragments, trails and separate renderer/model concerns. MIT metadata. Adopted bounded original particle bursts, compact sparks, blade/whip trails and muzzle flashes. Did not import generators, atlases or exported art.
+
+### 9. Tiddybub / 2d-assets
+
+https://github.com/Tiddybub/2d-assets
+
+Studied README and per-pack `SOURCE.md`/`License.txt` organization. Used as discovery/provenance reference for impact/audio packs. Repository metadata says NOASSERTION; README's broad CC0 statement was not treated as sufficient evidence for every file. Downloads came directly from Kenney after checking original pages and archive license files. No sprite collage or mismatched pack art copied.
+
+### 10. alfredang / street-fighter-game
+
+https://github.com/alfredang/street-fighter-game
+
+Studied README and `javascript/Sprite.js`: frame-aware attacks/hitboxes, anticipation/impact/recovery, facing and integer sprite sampling. No declared GitHub code license; README also describes AI-generated image assets. Borrowed only general combat-timing principles. No source, images, characters, logos or Street Fighter assets copied. Our attack visuals are original top-down pixel geometry.
+
+### 11. sajal37 / Top-Down-Shooter
+
+https://github.com/sajal37/Top-Down-Shooter
+
+Studied README, `src/entities/Bullet.ts` and `src/ui/ScreenEffects.ts`: immediate weapon feedback, trails, hit effects, recoil/shake and bounded projectile/effect lifecycles. No declared GitHub code license. Adopted the concepts using independent directional hitscan, a fixed 240-particle pool, capped traces and settings-aware hit-stop. No source or generated audio copied.
+
+### 12–15. Audio source review
+
+- [Kenney Interface Sounds](https://kenney.nl/assets/interface-sounds): original CC0 page/archive verified; retained interface bank.
+- [Kenney UI Audio](https://kenney.nl/assets/ui-audio): inspected download/license page, CC0. No recordings imported from this pack; existing Interface bank already covers UI.
+- [OpenGameArt](https://opengameart.org/): per-asset licenses checked for the two existing music recordings. Assets on OGA do not share one blanket license.
+- [Pixabay license summary](https://pixabay.com/service/license-summary/): attempted access returned HTTP 403. No Pixabay audio/assets used or license claims made.
+- Additional original sources: [Kenney Impact Sounds](https://kenney.nl/assets/impact-sounds) and [Kenney Digital Audio](https://kenney.nl/assets/digital-audio), both CC0 verified on source pages and bundled license text. Twenty-one unchanged recordings added. Exact filenames/credits are in `ASSETS.md` and `CREDITS.md`.
+
+Independent implementation keeps one office-art palette and sprite family. The references inform interaction, timing and system boundaries, not imported copyrighted characters, music or visual identity.

@@ -42,6 +42,18 @@ No music was generated or synthesized for the active game. Howler plays the exis
 
 Optional server-fan ambience is an independently synthesized non-musical low-volume 60 Hz hum.
 
+### Additional revision-2 SFX — Kenney
+
+**Impact Sounds** — https://kenney.nl/assets/impact-sounds — [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/).
+
+Twelve unchanged recordings: wooden footsteps, punch/soft-body/fall impacts, metallic wall/device impacts, bell, paper-machine and wooden-door sounds. License bundled as `public/audio/KENNEY-IMPACT-LICENSE.txt`.
+
+**Digital Audio** — https://kenney.nl/assets/digital-audio — [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/).
+
+Nine unchanged recordings: retro rifle/knife/whip cues, electric effects, revive/heal/status sounds and alarms. License bundled as `public/audio/KENNEY-DIGITAL-LICENSE.txt`.
+
+Filenames are preserved. Runtime playback varies pitch/volume and stereo placement, layers impacts with action cues, and loops selected machine sounds. No music was generated. Exact filenames are listed in `ASSETS.md`; maintenance downloader is `scripts/download-combat-audio.py`.
+
 ## Typography and software
 
 - **Silkscreen**, Jason Kottke: [Google Fonts source](https://github.com/google/fonts/tree/main/ofl/silkscreen), SIL Open Font License 1.1. Bundled via `@fontsource/silkscreen`; license accompanies the package.

@@ -8,9 +8,10 @@ export const rooms = [
   { id: 'hr', name: 'PEOPLE & CULTURE', x: 32, y: 448, w: 288, h: 320, color: '#a48d91' },
   { id: 'creative', name: 'CREATIVE / QA', x: 336, y: 448, w: 288, h: 320, color: '#a39277' },
   { id: 'operations', name: 'OPEN OFFICE / OPS', x: 640, y: 448, w: 288, h: 320, color: '#8a9773' },
-  { id: 'boss', name: 'DIRECTOR', x: 944, y: 448, w: 304, h: 320, color: '#9b926e' },
+  { id: 'boss', name: 'DIRECTOR', x: 944, y: 448, w: 304, h: 184, color: '#9b926e' },
+  { id: 'torture', name: 'TORTURE / HR BASEMENT-ISH', x: 944, y: 648, w: 304, h: 120, color: '#695861' },
 ] as const;
-export interface Furniture extends Rect { id: string; kind: 'desk' | 'shelf' | 'plant' | 'table' | 'sofa' | 'coffee' | 'server' | 'printer' | 'jukebox' | 'board' | 'cabinet' | 'mirror' | 'reception'; label?: string; action?: string; point?: Point }
+export interface Furniture extends Rect { id: string; kind: 'desk' | 'shelf' | 'plant' | 'table' | 'sofa' | 'coffee' | 'server' | 'printer' | 'jukebox' | 'board' | 'cabinet' | 'mirror' | 'reception' | 'rig'; label?: string; action?: string; point?: Point }
 export const furniture: Furniture[] = [
   { id: 'books', kind: 'shelf', x: 56, y: 118, w: 112, h: 28 }, { id: 'books2', kind: 'shelf', x: 192, y: 118, w: 96, h: 28 },
   { id: 'research-desk', kind: 'desk', x: 96, y: 208, w: 136, h: 40 },
@@ -29,18 +30,21 @@ export const furniture: Furniture[] = [
   { id: 'whiteboard', kind: 'board', x: 712, y: 664, w: 136, h: 20, action: 'board', label: 'Company whiteboard', point: { x: 776, y: 712 } },
   { id: 'boss', kind: 'desk', x: 1040, y: 528, w: 144, h: 48, action: 'computer', label: 'Director’s laptop', point: { x: 1112, y: 600 } },
   { id: 'mirror', kind: 'mirror', x: 1200, y: 480, w: 24, h: 24, action: 'character', label: 'Wardrobe & mirror', point: { x: 1208, y: 536 } },
-  { id: 'printer', kind: 'printer', x: 968, y: 672, w: 56, h: 32, action: 'reports', label: 'Report printer', point: { x: 984, y: 728 } },
+  { id: 'printer', kind: 'printer', x: 656, y: 688, w: 48, h: 32, action: 'reports', label: 'Report printer', point: { x: 680, y: 744 } },
+  { id: 'punishment-rig', kind: 'rig', x: 968, y: 680, w: 72, h: 32 },
+  { id: 'torture-control', kind: 'server', x: 1136, y: 688, w: 48, h: 24, action: 'torture', label: 'Torture room controls', point: { x: 1160, y: 744 } },
   { id: 'reception', kind: 'reception', x: 568, y: 784, w: 160, h: 32, action: 'company', label: 'Reception', point: { x: 648, y: 760 } },
   ...[{ x: 272, y: 240 }, { x: 576, y: 112 }, { x: 880, y: 288 }, { x: 1200, y: 160 }, { x: 368, y: 704 }, { x: 880, y: 488 }, { x: 1200, y: 704 }].map((p, i) => ({ ...p, id: `plant${i}`, kind: 'plant' as const, w: 24, h: 24, ...(i === 6 ? { action: 'plant', label: 'Suspiciously resilient fern', point: { x: 1208, y: 744 } } : {}) })),
 ];
 export const walls: Rect[] = [
   { x: 16, y: 64, w: 1248, h: 16 }, { x: 16, y: 64, w: 16, h: 752 }, { x: 1248, y: 64, w: 16, h: 752 }, { x: 16, y: 816, w: 1248, h: 16 },
   ...[320, 624, 928].flatMap(x => [{ x, y: 80, w: 16, h: 272 }, { x, y: 448, w: 16, h: 320 }]),
-  ...rooms.flatMap(r => [{ x: r.x, y: r.y === 80 ? 344 : 440, w: 104, h: 8 }, { x: r.x + 184, y: r.y === 80 ? 344 : 440, w: r.w - 184, h: 8 }]),
+  ...rooms.flatMap(r => [{ x: r.x, y: r.id === 'torture' ? 636 : r.y === 80 ? 344 : 440, w: 104, h: 8 }, { x: r.x + 184, y: r.id === 'torture' ? 636 : r.y === 80 ? 344 : 440, w: r.w - 184, h: 8 }]),
 ];
 export const obstacles = [...walls, ...furniture];
 export const spawn = { x: 648, y: 744 };
 export const exit = { x: 1208, y: 792 };
+export const punishmentSpot = { x: 1000, y: 728 };
 export const workstations: Record<Department, Point[]> = {
   Research: [{ x: 136, y: 280 }, { x: 200, y: 280 }, { x: 72, y: 280 }, { x: 248, y: 312 }],
   Development: [{ x: 408, y: 232 }, { x: 536, y: 296 }, { x: 360, y: 264 }, { x: 488, y: 296 }],

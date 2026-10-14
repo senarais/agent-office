@@ -1,5 +1,13 @@
 # Connect real agents
 
+## Recurring execution
+
+Configured providers work with **Boss laptop → Recurring tasks**, employee dialogue or the whiteboard. Each schedule stores its own provider/model selection and tool subset; execution goes through the same adapters below. See [RECURRING_TASKS.md](RECURRING_TASKS.md).
+
+To scrape/read/run commands automatically, use OpenCode with explicit allowed tools and a project path. OpenAI/compatible text-only adapters do not gain tools because a task is scheduled. Death, firing and assignment to the torture room interrupt current requests; deceased or confined employees cannot execute new agent work. Resurrection retains the same profile; similar replacement reuses safe provider references, never raw credentials.
+
+The scheduler needs your local server and provider runtime to remain running. No additional provider login or `.env` setting is needed beyond a working connection.
+
 All connections originate from the local Node backend. The game receives streaming events and saved results, never provider API keys.
 
 ## OpenAI API
@@ -76,6 +84,37 @@ Employee walks to their desk. Official `@opencode-ai/sdk` creates a session and 
 `ECONNREFUSED` / offline: check OpenCode is running on the configured host/port. Model errors: test again and select a `provider/model` available in that OpenCode instance. Workspace errors: use an absolute existing path with the necessary local permissions. Event stream error: the game keeps waiting for the real final response rather than inventing progress.
 
 SDK reference: https://opencode.ai/docs/sdk/ · Server: https://opencode.ai/docs/server/
+
+## Command Code CLI
+
+Runs the local **Command Code** CLI (`cmd`) headlessly and reuses your existing login — no key is stored in the game. The server spawns `cmd -p --output-format json`, streams its NDJSON events into the office, and keeps the CLI session for follow-ups. Nothing is fabricated: a logged-out or missing CLI fails visibly.
+
+Install and authenticate once at a terminal:
+
+```bash
+npm i -g command-code
+cmd login
+```
+
+Then at IT: **Add provider → Command Code CLI**, save, then **Test connection**. Testing runs `cmd --list-models`, so it fails honestly if the CLI is absent or not logged in. Pick a model in HR (any id from the list or an exact id, e.g. `claude-sonnet-4-6`).
+
+The optional **Command Code CLI path** selects a specific binary; otherwise `cmd` from PATH, or `COMMAND_CODE_BIN`, is used.
+
+Environment alternative, imported once on startup only when a model is given:
+
+```dotenv
+COMMAND_CODE_BIN=
+COMMAND_CODE_MODEL=claude-sonnet-4-6
+```
+
+### Tools, sessions and cancellation
+
+- A task’s **project path** becomes the CLI working directory. Without one, the CLI runs in the server’s directory.
+- Headless Command Code allows reads by default; file writes and shell commands are **blocked**. Granting `bash`, `write` or `edit` to an employee runs that assignment with the CLI’s non-interactive bypass (`--yolo`), because headless Command Code does not expose per-tool permissions. Grant only what you intend to allow.
+- The run’s `sessionId` is stored on the task/conversation and resumed with `--resume` on the next turn, so retries and follow-ups keep context.
+- In-game cancel/pause ends the child process, matching other providers. Tool activity maps to reading/terminal/working in the office.
+- Usage: Command Code returns token totals but no price. Finance shows counts only and never invents cost.
+- Exit codes map to honest messages: `3` not authenticated (run `cmd login`), `5` rate limited, `6` network failure, `7` server error, `8` max turns reached, `10` insufficient credits.
 
 ## OpenAI-compatible endpoints
 

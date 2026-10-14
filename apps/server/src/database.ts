@@ -5,10 +5,11 @@ import { randomBytes, createCipheriv, createDecipheriv, randomUUID, createHash }
 import { defaultAppearance, defaultSettings } from '../../../packages/shared/src/types';
 import type { WorldState, Secret } from '../../../packages/shared/src/types';
 import { spawn } from '../../../packages/shared/src/world';
+import { migrateState } from './migrate-state';
 
 export const now = () => new Date().toISOString();
 export function freshState(): WorldState {
-  return { version: 1, company: { id: '00000000-0000-4000-8000-000000000001', name: 'PT ABISENA RAIS JAYA', motto: 'Building companies, one agent at a time.', chaos: 0, wallColor: '#597264', plants: true, goals: 'Hire our first colleague. Make something worthwhile.' }, employees: [], tasks: [], providers: [], conversations: [], messages: [], reports: [], meetings: [], history: [], incidents: [], events: [], settings: structuredClone(defaultSettings), player: { ...spawn, appearance: { ...defaultAppearance, shirt: '#e4d9b7', jacket: '#597264' }, equipped: 'hand', coffee: 3, energyDrinks: 1, inventory: ['Office Key', 'Company Documents', 'Whip', 'Cartoon Rifle', 'USB Drive', 'Access Card'] }, savedAt: now(), storage: { mode: 'local' } };
+  return { version: 2, company: { id: '00000000-0000-4000-8000-000000000001', name: 'PT ABISENA RAIS JAYA', motto: 'Building companies, one agent at a time.', chaos: 0, wallColor: '#597264', plants: true, goals: 'Hire our first colleague. Make something worthwhile.' }, employees: [], tasks: [], providers: [], conversations: [], messages: [], reports: [], meetings: [], recurringTasks: [], scheduleRuns: [], tortureSessions: [], history: [], incidents: [], events: [], settings: structuredClone(defaultSettings), player: { ...spawn, appearance: { ...defaultAppearance, shirt: '#e4d9b7', jacket: '#597264' }, equipped: 'hand', coffee: 3, energyDrinks: 1, food: 3, drinks: 3, inventory: ['Office Key', 'Company Documents', 'Whip', 'Knife', 'Cartoon Rifle', 'USB Drive', 'Access Card'] }, savedAt: now(), storage: { mode: 'local' } };
 }
 
 export class Store {
@@ -22,7 +23,7 @@ export class Store {
     this.db = new DatabaseSync(join(directory, 'office.sqlite')); chmodSync(join(directory, 'office.sqlite'), 0o600);
     this.db.exec('PRAGMA journal_mode=WAL; CREATE TABLE IF NOT EXISTS world (id INTEGER PRIMARY KEY CHECK(id=1), payload TEXT NOT NULL); CREATE TABLE IF NOT EXISTS vault (id TEXT PRIMARY KEY, payload TEXT NOT NULL);');
     const row = this.db.prepare('SELECT payload FROM world WHERE id=1').get() as { payload: string } | undefined;
-    this.state = row ? JSON.parse(row.payload) : freshState();
+    this.state = migrateState(row ? JSON.parse(row.payload) : freshState());
   }
   hasSave() { return !!this.db.prepare('SELECT id FROM world WHERE id=1').get(); }
   secret(id: string): Secret {
@@ -48,7 +49,7 @@ export class Store {
   }
   async restore() {
     if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY || this.hasSave()) return;
-    try { const rows = await this.remote('office_state', 'GET', undefined, `?id=eq.${this.state.company.id}&select=payload&limit=1`); if (rows[0]?.payload?.version === 1) { this.state = rows[0].payload; this.state.providers.forEach(p => { p.hasSecret = false; p.status = 'untested'; }); } }
+    try { const rows = await this.remote('office_state', 'GET', undefined, `?id=eq.${this.state.company.id}&select=payload&limit=1`); if ([1, 2].includes(rows[0]?.payload?.version)) { this.state = migrateState(rows[0].payload); this.state.providers.forEach(p => { p.hasSecret = false; p.status = 'untested'; }); } }
     catch (e) { this.state.storage = { mode: 'local', restoreBlocked: true, error: `${(e as Error).message} Initial remote restore failed; remote writes are paused to protect the existing backup. Local play still saves. See docs/SUPABASE_SETUP.md.` }; }
   }
   sync(force = false): Promise<void> {
@@ -62,7 +63,7 @@ export class Store {
       const s = structuredClone(this.state), cid = s.company.id;
       await this.remote('companies', 'POST', { id: cid, name: s.company.name, payload: s.company });
       const stableId = (value: string) => createHash('sha256').update(value).digest('hex').slice(0, 32).replace(/(.{8})(.{4})(.{4})(.{4})(.{12})/, '$1-$2-$3-$4-$5');
-      const tables: Record<string, { id: string }[]> = { employees: s.employees, tasks: s.tasks, conversations: s.conversations, messages: s.messages, reports: s.reports, meetings: s.meetings, employment_history: s.history, provider_connections: s.providers, incidents: s.incidents, task_events: s.events,
+      const tables: Record<string, { id: string }[]> = { provider_connections: s.providers, employees: s.employees, recurring_tasks: s.recurringTasks, tasks: s.tasks, scheduled_task_runs: s.scheduleRuns, torture_sessions: s.tortureSessions, conversations: s.conversations, messages: s.messages, reports: s.reports, meetings: s.meetings, employment_history: s.history, incidents: s.incidents, task_events: s.events,
         employee_appearance: s.employees.map(e => ({ id: e.id, employeeId: e.id, appearance: e.appearance })),
         employee_provider_config: s.employees.map(e => ({ id: e.id, employeeId: e.id, providerId: e.providerId, model: e.model, tools: e.tools, systemPrompt: e.systemPrompt })),
         meeting_participants: s.meetings.flatMap(m => m.attendeeIds.map(eid => ({ id: stableId(`${m.id}:participant:${eid}`), meetingId: m.id, employeeId: eid }))),
@@ -72,7 +73,7 @@ export class Store {
       await this.remote('game_settings', 'POST', { id: cid, company_id: cid, payload: s.settings });
       await this.remote('company_settings', 'POST', { id: cid, company_id: cid, payload: s.company });
       await this.remote('player_state', 'POST', { id: cid, company_id: cid, payload: s.player });
-      await this.remote('inventory', 'POST', { id: cid, company_id: cid, payload: { items: s.player.inventory, coffee: s.player.coffee, energyDrinks: s.player.energyDrinks, equipped: s.player.equipped } });
+      await this.remote('inventory', 'POST', { id: cid, company_id: cid, payload: { items: s.player.inventory, coffee: s.player.coffee, energyDrinks: s.player.energyDrinks, food: s.player.food, drinks: s.player.drinks, equipped: s.player.equipped } });
       await this.remote('office_state', 'POST', { id: cid, company_id: cid, payload: s });
       this.state.storage = { mode: 'supabase', syncedAt: now() };
     } catch (e) { this.state.storage = { mode: 'local', error: (e as Error).message }; }
