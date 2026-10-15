@@ -5,11 +5,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { Engine } from '../apps/server/src/engine';
-import { Store, freshState } from '../apps/server/src/database';
+import { Store } from '../apps/server/src/database';
 import { migrateState } from '../apps/server/src/migrate-state';
 import { nextOccurrence } from '../apps/server/src/scheduler';
-import { defaultAppearance } from '../packages/shared/src/types';
-import type { Employee, Weapon, PunishmentMethod, WorldState } from '../packages/shared/src/types';
+import { defaultAppearance, defaultSettings } from '../packages/shared/src/types';
+import type { Employee, Weapon, PunishmentMethod } from '../packages/shared/src/types';
 import type { Schedule } from '../packages/shared/src/automation';
 import { directions, weapons, punishments, traceAttack } from '../packages/shared/src/combat';
 import { distance, punishmentSpot } from '../packages/shared/src/world';
@@ -142,10 +142,50 @@ test('torture interrupts agents, blocks scheduled work, can kill, and Off stops 
   f.engine.s.settings.violence = 'full'; f.engine.tortureAction(session.id, 'resume'); for (let i = 0; i < 5; i++) { f.advance(2200); f.engine.tick(.1); } assert.equal(e.employmentStatus, 'deceased'); assert.equal(session.status, 'deceased'); assert.equal(e.corpsePresent, true); assert.equal(rule.enabled, false);
 });
 
-test('old local snapshots upgrade without resetting employees, provider IDs, death history or inventory', () => {
-  const old = freshState(); old.version = 1; const employee = { ...profile, id: randomUUID(), employmentStatus: 'deceased', endedAt: '2026-01-01T00:00:00Z', position: { x: 680, y: 400 }, home: { x: 136, y: 280 }, destination: { x: 680, y: 400 }, providerId: 'preserved-provider', model: 'preserved-model' };
-  const raw = JSON.parse(JSON.stringify(old)); raw.employees = [employee]; delete raw.recurringTasks; delete raw.scheduleRuns; delete raw.tortureSessions; delete raw.settings.weaponDamage; delete raw.settings.blood; delete raw.player.food; delete raw.player.drinks; raw.player.inventory = raw.player.inventory.filter((item: string) => item !== 'Knife');
-  const upgraded = migrateState(raw as WorldState); assert.equal(upgraded.version, 2); assert.equal(upgraded.employees[0].providerId, 'preserved-provider'); assert.equal(upgraded.employees[0].corpsePresent, true); assert.equal(upgraded.employees[0].currentHp, 0); assert.equal(upgraded.employees[0].diedAt, '2026-01-01T00:00:00Z'); assert.equal(upgraded.settings.weaponDamage.knife, 18); assert.equal(upgraded.player.food, 3); assert.ok(upgraded.player.inventory.includes('Knife'));
+test('old v1/v2 local snapshots upgrade into a first business without resetting employees, provider IDs, death history or inventory', () => {
+  const employee = { ...profile, id: randomUUID(), employmentStatus: 'deceased', endedAt: '2026-01-01T00:00:00Z', position: { x: 680, y: 400 }, home: { x: 136, y: 280 }, destination: { x: 680, y: 400 }, providerId: 'preserved-provider', model: 'preserved-model' };
+  const legacy = {
+    version: 1, company: { id: '00000000-0000-4000-8000-000000000001', name: 'PT ABISENA RAIS JAYA', motto: 'old', chaos: 0, wallColor: '#597264', plants: true, goals: '' },
+    employees: [employee], tasks: [], providers: [], conversations: [], messages: [], reports: [], meetings: [], history: [], incidents: [], events: [],
+    settings: { ...structuredClone(defaultSettings) } as Record<string, unknown>,
+    player: { x: 680, y: 400, appearance: { ...defaultAppearance }, equipped: 'hand', coffee: 3, energyDrinks: 1, inventory: ['Office Key'] },
+    savedAt: '2026-01-01T00:00:00Z', storage: { mode: 'local' },
+  };
+  delete legacy.settings.weaponDamage; delete legacy.settings.blood; delete (legacy.player as Record<string, unknown>).food; delete (legacy.player as Record<string, unknown>).drinks;
+  const upgraded = migrateState(legacy); const office = upgraded.offices[0];
+  assert.equal(upgraded.version, 3); assert.equal(upgraded.activeOfficeId, office.id);
+  assert.equal(office.employees[0].providerId, 'preserved-provider'); assert.equal(office.employees[0].corpsePresent, true); assert.equal(office.employees[0].currentHp, 0); assert.equal(office.employees[0].diedAt, '2026-01-01T00:00:00Z');
+  assert.equal(upgraded.settings.weaponDamage.knife, 18); assert.equal(upgraded.director.food, 3); assert.ok(upgraded.director.inventory.includes('Knife'));
+  assert.deepEqual(office.playerPosition, { x: 680, y: 400 });
+});
+
+test('one PT runs several businesses with isolated staff and shared providers, settings and director', async t => {
+  const f = fixture(t), p = await provider(f.engine); const firstOffice = f.engine.s.activeOfficeId;
+  const ana = f.engine.hire({ ...profile, name: 'Ana', providerId: p.id, model: 'test-model' });
+  const business = f.engine.createOffice({ name: 'F&B Division', industry: 'Food & Beverage' });
+  assert.notEqual(business.id, firstOffice); assert.equal(f.engine.s.activeOfficeId, firstOffice); assert.equal(f.engine.s.employees.length, 1); assert.equal(f.engine.s.offices.length, 2);
+  f.engine.switchOffice(business.id);
+  assert.equal(f.engine.s.activeOfficeId, business.id); assert.equal(f.engine.s.employees.length, 0); assert.equal(f.engine.s.providers.length, 1);
+  const budi = f.engine.hire({ ...profile, name: 'Budi', providerId: p.id, model: 'test-model' }); assert.equal(f.engine.s.employees.length, 1);
+  f.engine.s.player.coffee = 5; f.engine.s.settings.music = .11;
+  f.engine.switchOffice(firstOffice);
+  assert.equal(f.engine.s.employees[0].id, ana.id); assert.equal(f.engine.s.player.coffee, 5); assert.equal(f.engine.s.settings.music, .11); assert.notEqual(ana.id, budi.id);
+  assert.equal(f.engine.s.offices.find(o => o.id === business.id)!.employees[0].id, budi.id);
+});
+
+test('a scheduled job in one business keeps running while another business is active', async t => {
+  const f = fixture(t), p = await provider(f.engine); const firstOffice = f.engine.s.activeOfficeId;
+  const business = f.engine.createOffice({ name: 'SaaS Division', industry: 'Software' });
+  f.engine.switchOffice(business.id);
+  const e = f.engine.hire({ ...profile, providerId: p.id, model: 'test-model' }); e.position = { ...e.home };
+  f.engine.scheduler.save({ ...definition(e), schedule: { ...daily, type: 'interval', intervalMinutes: 1 } });
+  f.engine.switchOffice(firstOffice);
+  f.engine.providerFactory = () => ({ listModels: async () => ['test-model'], execute: async r => { r.onText('Background business report'); return { text: 'Background business report' }; } });
+  f.advance(2 * 60000);
+  for (let i = 0; i < 250; i++) { f.engine.tick(.1); await new Promise(r => setTimeout(r, 2)); }
+  await eventually(() => f.engine.s.offices.find(o => o.id === business.id)!.reports.length > 0);
+  const office = f.engine.s.offices.find(o => o.id === business.id)!;
+  assert.equal(office.reports[0].text, 'Background business report'); assert.equal(f.engine.s.activeOfficeId, firstOffice);
 });
 
 test('weapon direction basis and configured damage remain deterministic', t => {

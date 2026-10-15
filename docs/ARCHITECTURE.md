@@ -74,6 +74,8 @@ There is no artificial percent-progress counter. Arrival at an assigned workstat
 
 Provider interface: `listModels()` (also connection health check) and `execute()` with an abort signal, model, system/context, messages, selected tools, session callback, text callback and activity callback. Execution returns authoritative output and optional usage. Provider-specific conversation creation, cancellation and event subscription occur inside the adapter rather than unnecessary no-op interface methods.
 
+One PT holds several business offices. The persisted root is `{ company, settings, providers, director, activeOfficeId, offices[] }` (`GameSave`); `GameState` resolves `state.employees`/`state.tasks`/`state.player.x` etc. to the **active** office and keeps providers, options and the director at the PT root, so the engine code reads the same fields as before. `tick`, `dispatch` and `Scheduler` iterate **every** office (background businesses keep walking, executing and scheduling), async task/meeting execution captures its owning office so a switch mid-request cannot corrupt state, and the browser only ever receives `view()` for the active office plus an office directory. A task's project context names its business.
+
 OpenCode tool events map to reading/terminal/working/waiting. Permission requests are surfaced but approval stays in the attached OpenCode client. Text-only OpenAI-compatible employees cannot claim to execute filesystem tools. The Command Code adapter spawns the local `cmd` CLI headlessly, maps its NDJSON text/tool events, persists the returned session id for `--resume`, and terminates the child process on cancel; granting `bash`/`write`/`edit` runs that assignment with the CLI’s non-interactive bypass.
 
 Pausing is explicitly cancel-and-preserve-context, not native suspension. Clarification is saved for the next retry/turn. Report revision creates a new task with original output as context. Interrupted server restarts require explicit retry to prevent duplicate paid/external work.
@@ -86,7 +88,7 @@ Meetings gather 1–6 available agents at unique seats. Agents contribute sequen
 
 ## Durable state
 
-SQLite WAL contains a transactional single-row world snapshot and separate encrypted provider vault. Single-process ownership is deliberate. Hiring, tasks, messages, reports, configuration and employment events write immediately; positions checkpoint every five seconds. Save errors are not silently replaced by simulated success.
+SQLite WAL contains a transactional single-row PT snapshot (every business office) and separate encrypted provider vault. Single-process ownership is deliberate. Hiring, tasks, messages, reports, configuration and employment events write immediately; positions checkpoint every five seconds. Save errors are not silently replaced by simulated success.
 
 Optional Supabase replication writes queryable entity tables, then complete `office_state` snapshot last. Empty local saves can restore it. Existing local saves win; there is no bidirectional multi-writer merge. Raw secrets never replicate. RLS has no public access policies; backend service role owns writes.
 

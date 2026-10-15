@@ -16,6 +16,12 @@ Death is **not automatic firing**. At a body or HR, choose **Resurrect / Fire wi
 
 Existing saves upgrade automatically without resetting staff or provider profiles. For an existing Supabase project, also apply `supabase/migrations/20261006213943_scheduler_combat_and_torture.sql` after the original migration. No new `.env` variables are needed for automation or gameplay.
 
+## Revision 3: one PT, many businesses
+
+The company is now a holding. Open several **businesses**, each a whole different office with its own people, work, reports, recurring schedules, torture room, incidents and branding. Walk to the exit door (bottom-right, `EXIT →`) and press **E** for the **PT Lobby**, or use **Boss laptop → Businesses**, to switch. Agent providers, all options and the director (appearance, inventory, consumables) are shared across the PT; each business keeps its own staff, tasks, analytics and office look. Every business keeps running in the background while you stand in another.
+
+Existing saves upgrade automatically — your current office becomes the first business. For an existing Supabase project, apply `supabase/migrations/20261015000000_multi_office.sql` after the earlier migrations (adds per-office ids, the branding table, and the Command Code provider kind).
+
 ## Quick start
 
 **Node.js 22.13+ required; Node 24 recommended.** Uses Node's built-in SQLite. No Docker required.
@@ -86,6 +92,7 @@ Typing disables movement. Core keys are remappable in **Esc → Controls**. Touc
 ## In-world systems
 
 - **Office:** research, developer desks, meeting room, IT, HR, creative/QA, open office/operations, pantry, lounge, boss office, reception, printer and whiteboard. Shared collision grid and A*; short corridors.
+- **Businesses:** one PT holding several offices. Switching via the exit door or Boss laptop replaces the whole roster, work and branding on screen while shared providers/options continue across the PT. Each business runs its own schedules in the background.
 - **Employees:** user-created profiles, modular appearance, HP, five departments, tool permissions, morale/energy/relationship/stress/productivity, idle coffee trips, healing, resurrection, replacements and employment history. Capacity: 20 positions including unresolved deceased staff, four workstations per department.
 - **Tasks:** durable prioritized queues; real workstation arrival before execution; streamed output/tool activity; error details, retry, cancel, pause-as-cancel and saved clarifications; report delivery/revisions/approval.
 - **Recurring tasks:** server-side one-time/daily/weekly/interval/cron, timezone/DST, durable occurrence claims, no overlapping runs, bounded retry, history, pause/resume/edit/delete and selectable report output. Works with browser closed while server remains running.
@@ -109,7 +116,7 @@ The backend binds to loopback, validates Host/Origin, rejects cross-site request
 
 ### Optional Supabase
 
-Configure `SUPABASE_URL` and backend-only `SUPABASE_SERVICE_ROLE_KEY`, then apply the included migration. SQLite remains the immediate offline save; records and complete restore snapshots replicate to Supabase. Unreachable database errors appear in **Company** and local saves remain usable.
+Configure `SUPABASE_URL` and backend-only `SUPABASE_SERVICE_ROLE_KEY`, then apply the included migrations. SQLite remains the immediate offline save; records and complete restore snapshots replicate to Supabase. Unreachable database errors appear in **Company** and local saves remain usable.
 
 Follow **[docs/SUPABASE_SETUP.md](docs/SUPABASE_SETUP.md)**. No public/anon key is needed by this frontend. No remote database is modified by `npm install` or `npm run dev` without your configuration.
 

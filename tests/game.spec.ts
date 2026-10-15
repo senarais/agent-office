@@ -69,6 +69,21 @@ test('physical meeting, persisted minutes, whiteboard and boss computer stay ins
   await expect.poll(async () => (await state(page)).meetings.at(-1)?.status, { timeout: 30000 }).toBe('completed'); await expect(page.getByRole('heading', { name: 'Meeting summary', exact: true })).toBeVisible(); await page.screenshot({ path: 'docs/screenshots/meeting.png' });
   const m = (await state(page)).meetings.at(-1)!; expect(m.messages).toHaveLength(2); expect(m.summary).toContain('DEMO SIMULATION');
   await terminal(page, 776, 712, 'COMPANY WHITEBOARD'); await page.getByRole('tab', { name: 'Company goals', exact: true }).click(); await page.getByLabel('What are we building?').fill('A genuinely useful pixel office.'); await page.getByRole('button', { name: 'Update whiteboard' }).click(); await expect.poll(async () => (await state(page)).company.goals).toBe('A genuinely useful pixel office.');
-  await terminal(page, 1112, 600, 'ABISENA OS'); await expect(page.locator('.desktop-icons').getByRole('button')).toHaveCount(12); await page.screenshot({ path: 'docs/screenshots/boss-computer.png', animations: 'disabled' }); await page.getByRole('button', { name: 'Analytics Honest numbers' }).click(); await expect(page.getByText('Completed meetings', { exact: true })).toBeVisible();
+  await terminal(page, 1112, 600, 'ABISENA OS'); await expect(page.locator('.desktop-icons').getByRole('button')).toHaveCount(13); await page.screenshot({ path: 'docs/screenshots/boss-computer.png', animations: 'disabled' }); await page.getByRole('button', { name: 'Analytics Honest numbers' }).click(); await expect(page.getByText('Completed meetings', { exact: true })).toBeVisible();
   await page.reload(); await page.getByRole('button', { name: 'ENTER OFFICE' }).click(); expect((await state(page)).meetings.at(-1)!.id).toBe(m.id);
+});
+
+test('switching businesses swaps the whole roster: the previous office staff cannot linger on screen', async ({ page }) => {
+  await enter(page);
+  const bootstrap = await (await page.request.get('/api/bootstrap')).json(); const headers = { 'X-Office-Token': bootstrap.token }; const s = await state(page); const firstOffice = s.activeOfficeId;
+  const result = await page.request.post('/api/employees', { headers, data: { name: 'Lingering', role: 'Analyst', department: 'Research', appearance: s.player.appearance } }); expect(result.ok()).toBe(true);
+  const hired = (await state(page)).employees.find(e => e.name === 'Lingering')!;
+  await expect.poll(() => page.evaluate(async id => { const { officeScene } = await import('/apps/game/src/game/OfficeScene.ts' as string); return (officeScene as unknown as { actors: Map<string, unknown> }).actors.has(id); }, hired.id)).toBe(true);
+  const created = await (await page.request.post('/api/offices', { headers, data: { name: 'Second Floor', industry: 'Software' } })).json(); expect(created.id).not.toBe(firstOffice);
+  await page.request.post('/api/offices/switch', { headers, data: { id: created.id } }); await expect.poll(async () => (await state(page)).activeOfficeId).toBe(created.id);
+  // The new office is empty, so the previous office's actor must be destroyed rather than left frozen on screen.
+  await expect.poll(() => page.evaluate(async () => { const { officeScene } = await import('/apps/game/src/game/OfficeScene.ts' as string); return (officeScene as unknown as { actors: Map<string, unknown> }).actors.size; })).toBe(0);
+  // Its staff and work are untouched by the switch: returning restores the original roster.
+  await page.request.post('/api/offices/switch', { headers, data: { id: firstOffice } }); await expect.poll(async () => (await state(page)).activeOfficeId).toBe(firstOffice);
+  await expect.poll(() => page.evaluate(async id => { const { officeScene } = await import('/apps/game/src/game/OfficeScene.ts' as string); return (officeScene as unknown as { actors: Map<string, unknown> }).actors.has(id); }, hired.id)).toBe(true);
 });

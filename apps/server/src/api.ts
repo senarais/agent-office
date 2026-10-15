@@ -5,6 +5,7 @@ import { Engine, GameError } from './engine';
 import { Store } from './database';
 import { appearanceSchema, parseSettings, weaponSchema, punishmentSchema } from './schemas';
 import { safeError } from './providers';
+import { view } from './gamestate';
 import { canStand } from '../../../packages/shared/src/world';
 import type { ServerEvent } from '../../../packages/shared/src/types';
 
@@ -24,12 +25,12 @@ export async function createApp(directory = process.env.DATA_DIR || '.local-data
   });
   app.setErrorHandler((error, _req, reply) => { const status = error instanceof GameError ? error.status : error instanceof z.ZodError ? 400 : 500; reply.status(status).send({ error: error instanceof z.ZodError ? error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ') : safeError(error) }); });
   app.get('/api/health', () => ({ ok: true }));
-  app.get('/api/bootstrap', (_req, reply) => { reply.header('Set-Cookie', `office_session=${token}; Path=/api; HttpOnly; SameSite=Strict`); return { state: engine.s, token, demoEnabled: process.env.ENABLE_DEMO_PROVIDER === 'true' }; });
-  app.get('/api/state', () => engine.s);
+  app.get('/api/bootstrap', (_req, reply) => { reply.header('Set-Cookie', `office_session=${token}; Path=/api; HttpOnly; SameSite=Strict`); return { state: view(engine.s), token, demoEnabled: process.env.ENABLE_DEMO_PROVIDER === 'true' }; });
+  app.get('/api/state', () => view(engine.s));
   app.get('/api/events', (req, reply) => {
     reply.hijack(); reply.raw.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
     const send = (event: ServerEvent) => { if (!reply.raw.destroyed && reply.raw.writableLength < 1048576) reply.raw.write(`data: ${JSON.stringify(event)}\n\n`); };
-    send({ type: 'snapshot', state: engine.s }); engine.bus.on('message', send);
+    send({ type: 'snapshot', state: view(engine.s) }); engine.bus.on('message', send);
     const heartbeat = setInterval(() => { if (!reply.raw.destroyed) reply.raw.write(': heartbeat\n\n'); }, 15000);
     req.raw.on('close', () => { clearInterval(heartbeat); engine.bus.off('message', send); });
   });
@@ -52,6 +53,9 @@ export async function createApp(directory = process.env.DATA_DIR || '.local-data
   app.post<{ Params: { id: string } }>('/api/chat/:id/cancel', req => { engine.cancelChat(req.params.id); return { ok: true }; });
   app.post('/api/providers', req => engine.configureProvider(req.body));
   app.post<{ Params: { id: string } }>('/api/providers/:id/test', req => engine.testProvider(req.params.id));
+  app.post('/api/offices', req => engine.createOffice(req.body));
+  app.post('/api/offices/switch', req => engine.switchOffice(z.object({ id: z.string().max(80) }).parse(req.body).id));
+  app.put<{ Params: { id: string } }>('/api/offices/:id', req => engine.renameOffice(req.params.id, req.body));
   app.post<{ Params: { id: string } }>('/api/reports/:id/action', req => { const b = z.object({ action: z.enum(['read', 'approve', 'revise', 'archive', 'followup']), instructions: z.string().max(10000).optional() }).parse(req.body); return engine.reportAction(req.params.id, b.action, b.instructions); });
   app.post('/api/meetings', req => { const b = z.object({ topic: z.string().min(1).max(4000), attendeeIds: z.array(z.string().uuid()).min(1).max(6) }).parse(req.body); return engine.meeting(b.topic, b.attendeeIds); });
   app.post<{ Params: { id: string } }>('/api/meetings/:id/cancel', req => { engine.cancelMeeting(req.params.id); return { ok: true }; });

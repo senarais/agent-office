@@ -37,7 +37,7 @@ export interface Meeting { id: string; topic: string; attendeeIds: string[]; sta
 export type ProviderKind = 'openai' | 'opencode' | 'commandcode' | 'generic' | 'demo';
 export interface ProviderConfig { id: string; name: string; kind: ProviderKind; baseUrl: string; enabled: boolean; models: string[]; status: 'untested' | 'connected' | 'error'; error?: string; hasSecret: boolean }
 export interface Secret { apiKey?: string; headers?: Record<string, string> }
-export type EventType = 'employee.hired' | 'employee.updated' | 'employee.fired' | 'employee.deceased' | 'employee.arrived' | 'employee.healed' | 'employee.revived' | 'task.created' | 'task.started' | 'task.progress' | 'task.completed' | 'task.failed' | 'task.cancelled' | 'chat.message' | 'chat.completed' | 'meeting.started' | 'meeting.message' | 'meeting.completed' | 'provider.connected' | 'provider.failed' | 'report.delivered' | 'combat.hit' | 'settings.saved' | 'world.changed' | 'schedule.updated' | 'schedule.started' | 'schedule.finished' | 'torture.started' | 'torture.stopped';
+export type EventType = 'employee.hired' | 'employee.updated' | 'employee.fired' | 'employee.deceased' | 'employee.arrived' | 'employee.healed' | 'employee.revived' | 'task.created' | 'task.started' | 'task.progress' | 'task.completed' | 'task.failed' | 'task.cancelled' | 'chat.message' | 'chat.completed' | 'meeting.started' | 'meeting.message' | 'meeting.completed' | 'provider.connected' | 'provider.failed' | 'report.delivered' | 'combat.hit' | 'settings.saved' | 'world.changed' | 'schedule.updated' | 'schedule.started' | 'schedule.finished' | 'torture.started' | 'torture.stopped' | 'office.created' | 'office.switched';
 export interface OfficeEvent { id: string; type: EventType; text: string; entityId?: string; createdAt: string; notify?: boolean }
 export interface Settings {
   master: number; music: number; sfx: number; ambient: number; dialogue: number; muted: boolean;
@@ -53,13 +53,36 @@ export type Weapon = 'hand' | 'whip' | 'knife' | 'rifle';
 export type PunishmentMethod = 'whip' | 'punch' | 'knife' | 'target' | 'shock' | 'meeting' | 'paperwork';
 export interface TortureSession { id: string; employeeId: string; method: PunishmentMethod; intensity: number; status: 'walking' | 'active' | 'paused' | 'released' | 'deceased'; nextPulseAt: number; pulses: number; damageDealt: number; createdAt: string; endedAt?: string }
 export interface AttackEvent { id: string; weapon: Weapon; direction: number; origin: Point; end: Point; employeeId?: string; damage: number; killed: boolean; at: number; source: 'player' | PunishmentMethod }
+export interface EmploymentRecord { id: string; employeeId: string; name: string; role: string; status: Employment; createdAt: string }
+export interface Incident { id: string; employeeId: string; weapon: Weapon; text: string; createdAt: string; tortureSessionId?: string }
+/** Director profile shared across the whole PT (appearance, inventory, consumables). Position is per office. */
+export interface Director { appearance: Appearance; equipped: Weapon; coffee: number; energyDrinks: number; food: number; drinks: number; inventory: string[]; caffeinatedUntil?: number }
+/** PT legal identity plus per-business branding (motto, wall color, plants, goals, chaos). */
+export interface OfficeBranding { id: string; name: string; motto: string; chaos: number; wallColor: string; plants: boolean; goals: string }
+/** One business office: its own people, work, records and director position. Shared providers/settings live at the PT root. */
+export interface Office {
+  id: string; name: string; industry: string; createdAt: string; company: OfficeBranding;
+  employees: Employee[]; tasks: Task[]; conversations: Conversation[]; messages: Message[];
+  reports: Report[]; meetings: Meeting[]; recurringTasks: RecurringTask[]; scheduleRuns: ScheduleRun[];
+  tortureSessions: TortureSession[]; history: EmploymentRecord[]; incidents: Incident[];
+  playerPosition: Point;
+}
+export interface OfficeSummary { id: string; name: string; industry: string; employees: number; activeTasks: number }
+/** Persisted root: PT-wide identity, settings, providers and director, plus every business office. */
+export interface GameSave {
+  version: number; company: { id: string; name: string };
+  settings: Settings; providers: ProviderConfig[]; director: Director;
+  activeOfficeId: string; offices: Office[]; events: OfficeEvent[];
+  savedAt: string; storage: { mode: 'local' | 'supabase'; error?: string; syncedAt?: string; restoreBlocked?: boolean };
+}
+/** Client-facing view of the active office, flat like the original single-office state plus the office directory. */
 export interface WorldState {
-  version: number; company: { id: string; name: string; motto: string; chaos: number; wallColor: string; plants: boolean; goals: string };
+  version: number; company: OfficeBranding;
   employees: Employee[]; tasks: Task[]; providers: ProviderConfig[]; conversations: Conversation[]; messages: Message[]; reports: Report[]; meetings: Meeting[];
   recurringTasks: RecurringTask[]; scheduleRuns: ScheduleRun[]; tortureSessions: TortureSession[];
-  history: { id: string; employeeId: string; name: string; role: string; status: Employment; createdAt: string }[];
-  incidents: { id: string; employeeId: string; weapon: Weapon; text: string; createdAt: string; tortureSessionId?: string }[];
-  events: OfficeEvent[]; settings: Settings; player: Point & { appearance: Appearance; equipped: Weapon; coffee: number; energyDrinks: number; food: number; drinks: number; inventory: string[]; caffeinatedUntil?: number };
+  history: EmploymentRecord[]; incidents: Incident[];
+  events: OfficeEvent[]; settings: Settings; player: Director & Point;
   savedAt: string; storage: { mode: 'local' | 'supabase'; error?: string; syncedAt?: string; restoreBlocked?: boolean };
+  activeOfficeId: string; offices: OfficeSummary[];
 }
 export type ServerEvent = { type: 'snapshot'; state: WorldState } | { type: 'event'; event: OfficeEvent } | { type: 'combat.fx'; attack: AttackEvent } | { type: 'world.tick'; employees: Pick<Employee, 'id' | 'position' | 'destination' | 'state' | 'bubble' | 'bubbleUntil'>[]; savedAt: string };

@@ -79,6 +79,10 @@ function furnitureTexture(scene: Phaser.Scene, f: Furniture) {
       rect(c, '#495f51', x, y - 13, w, h + 4); rect(c, '#78937b', x + 3, y - 19, w - 6, 20); rect(c, '#9fb094', x + 9, y + 4, w - 18, 22); rect(c, '#536d58', x + w / 2, y + 4, 2, 22); rect(c, '#8da484', x, y - 3, 10, 34); rect(c, '#8da484', x + w - 10, y - 3, 10, 34);
     } else if (f.kind === 'mirror') {
       rect(c, '#705b43', x, y - 32, w, 55); rect(c, '#bfd2bd', x + 3, y - 29, w - 6, 47); rect(c, '#e5e3c7', x + 7, y - 25, 3, 27); rect(c, '#e5e3c7', x + 11, y - 21, 3, 27);
+    } else if (f.kind === 'door') {
+      rect(c, '#3c584a', x - 2, y - 34, w + 4, h + 40); rect(c, '#243d33', x + 4, y - 28, w - 8, h + 28);
+      rect(c, '#6d8a79', x + 6, y - 26, w - 12, h + 22); rect(c, '#9db39f', x + 6, y - 26, w - 12, 3);
+      rect(c, '#c7ad6f', x + w - 14, y - 6, 4, 4); text(c, 'EXIT →', x - 4, y - 38, 7, '#e6d29b');
     } else {
       const col = f.kind === 'coffee' ? '#a07c56' : f.kind === 'jukebox' ? '#b68b65' : '#99a89a';
       rect(c, '#45594e', x, y - 18, w, h + 15); rect(c, col, x + 2, y - 22, w - 4, h + 15); rect(c, '#2a443e', x + 7, y - 14, w - 14, 17); rect(c, '#aec88f', x + 10, y - 10, w - 20, 3);

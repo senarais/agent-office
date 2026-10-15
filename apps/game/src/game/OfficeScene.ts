@@ -16,14 +16,14 @@ export class OfficeScene extends Phaser.Scene {
   combatFX!: CombatEffects; private health!: Phaser.GameObjects.Graphics; private seenFX = new Set<string>(); private lastFootstep = 0;
   private target?: { id: string; action: string; label: string }; private path: Point[] = []; private autoInteract?: string; private lastApproach = 0;
   private approachHeld?: { id: string; position: Point }; private approachPending?: string;
-  private lastSync = 0; private lastStep = 0; private lastEvent = ''; private lastStyle = ''; private lastAttack = 0; private boundsKey = ''; private printedAt = 0;
+  private lastSync = 0; private lastStep = 0; private lastEvent = ''; private lastStyle = ''; private lastAttack = 0; private boundsKey = ''; private printedAt = 0; private officeId = '';
   constructor() { super('OfficeScene'); }
   create() {
     officeScene = this; const world = useGame.getState().world!; createOfficeArt(this);
     this.add.image(0, 0, 'floor').setOrigin(0);
     for (const f of furniture) this.add.image(f.x - 8, f.y - 36, `f-${f.id}`).setOrigin(0).setDepth(f.y + f.h).setName(f.id);
     this.wallTint = this.add.graphics().setDepth(1);
-    const key = characterTextures(this, world.player.appearance, true); this.player = this.add.image(world.player.x, world.player.y, `${key}-0-0`).setOrigin(.5, .9);
+    const key = characterTextures(this, world.player.appearance, true); this.player = this.add.image(world.player.x, world.player.y, `${key}-0-0`).setOrigin(.5, .9); this.officeId = world.activeOfficeId;
     this.cameras.main.setBounds(0, 0, WORLD.width, WORLD.height).setZoom(world.settings.pixelScale).startFollow(this.player, true, .12, .12); this.cameras.main.roundPixels = true;
     this.prompt = this.add.text(0, 0, '', { fontFamily: 'Silkscreen', fontSize: '8px', color: '#f3e7be', backgroundColor: '#21382f', padding: { x: 6, y: 5 }, align: 'center' }).setOrigin(.5, 0).setDepth(3000);
     this.overlay = this.add.rectangle(0, 0, WORLD.width, WORLD.height, 0x172e49, .08).setOrigin(0).setDepth(2000);
@@ -78,6 +78,8 @@ export class OfficeScene extends Phaser.Scene {
   update(time: number, delta: number) {
     const state = useGame.getState(); const world = state.world; if (!this.player || !world) return;
     const dt = Date.now() < this.combatFX.hitStopUntil ? 0 : Math.min(delta, 50) / 1000, settings = world.settings, camera = this.cameras.main;
+    // Switching businesses teleports the director to the new office's entrance; actors reconcile from world.employees.
+    if (this.officeId !== world.activeOfficeId) { const initial = !this.officeId; this.officeId = world.activeOfficeId; if (!initial) { this.cancelApproach(); this.keys.clear(); this.path = []; this.player.setPosition(world.player.x, world.player.y); camera.centerOn(world.player.x, world.player.y); } }
     if (state.entered && !state.window && world.player.equipped === 'rifle' && this.keys.has(settings.keys.action)) this.attack();
     if (camera.zoom !== settings.pixelScale) camera.setZoom(settings.pixelScale);
     const boundsKey = `${camera.width}:${camera.height}:${camera.zoom}`;
@@ -136,6 +138,9 @@ export class OfficeScene extends Phaser.Scene {
       const caption = hurt ? '★ Seriously?! ★' : e.bubbleUntil > Date.now() ? e.bubble : e.state === 'torture' ? '! HR, PLEASE.' : e.stress > 80 ? '... deeply stressed ...' : e.state === 'blocked' ? '! PROVIDER ERROR' : work ? e.state === 'reading' ? 'Reading…' : e.state === 'terminal' ? '>_ running tool' : 'Working…' : e.state === 'waiting' ? '! Needs permission' : '';
       a.bubble.setText(caption).setPosition(a.sprite.x, a.sprite.y - 40).setVisible(!!caption && state.window?.id !== e.id);
     }
+    // Actors are keyed by employee id and derived from the active office's roster. Destroy any left over from another office (e.g. the previous business after a switch) so old staff cannot linger as frozen, non-interactive sprites.
+    const presentIds = new Set(world.employees.map(e => e.id));
+    for (const [id, actor] of this.actors) if (!presentIds.has(id)) { actor.sprite.destroy(); actor.bubble.destroy(); actor.label.destroy(); this.actors.delete(id); }
     const targets = [...world.employees.filter(e => e.employmentStatus === 'active' || e.employmentStatus === 'deceased' && e.corpsePresent).map(e => ({ id: e.id, action: 'employee', label: e.employmentStatus === 'deceased' ? `Resolve ${e.name}’s case` : `Talk to ${e.name}`, point: this.approachHeld?.id === e.id ? this.approachHeld.position : this.actors.get(e.id)?.sprite || e.position })), ...furniture.filter(f => f.action && f.point).map(f => ({ id: f.id, action: f.action!, label: f.label!, point: f.point! }))];
     const reachable = targets.filter(t => distance(this.player, t.point) < 46 && clearShot(this.player, t.point));
     this.target = reachable.find(t => t.id === this.autoInteract) || reachable.sort((a, b) => distance(this.player, a.point) - distance(this.player, b.point))[0];

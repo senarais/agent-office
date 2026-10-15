@@ -1,6 +1,7 @@
 import { CronExpressionParser } from 'cron-parser';
 import { z } from 'zod';
 import type { RecurringTask, Schedule, ScheduleRun } from '../../../packages/shared/src/automation';
+import type { Office } from '../../../packages/shared/src/types';
 import type { Engine } from './engine';
 import { GameError } from './engine';
 import { id } from './database';
@@ -30,86 +31,89 @@ export function nextOccurrence(schedule: Schedule, after: number, anchor: number
   } catch (error) { throw new GameError(`Invalid schedule: ${(error as Error).message}`); }
 }
 
-/** Single-writer durable scheduler. Task + occurrence claim are saved together by Engine.task. */
+/** Single-writer durable scheduler. Schedules run for every business office, even while another is active. */
 export class Scheduler {
   constructor(private engine: Engine) {}
-  private get s() { return this.engine.s; }
+  private get s() { return this.engine.s.active; }
   private get time() { return this.engine.clock(); }
   save(input: unknown, ruleId?: string) {
-    const data = recurringSchema.parse(input); const employee = this.engine.employee(data.employeeId);
-    if (data.providerId && !this.s.providers.some(p => p.id === data.providerId)) throw new GameError('Provider not found');
-    if (!ruleId && this.s.recurringTasks.filter(r => !r.deletedAt).length >= 100) throw new GameError('Local schedule capacity: 100 definitions');
+    const data = recurringSchema.parse(input); const office = this.s; const employee = this.engine.employee(data.employeeId);
+    if (data.providerId && !this.engine.s.providers.some(p => p.id === data.providerId)) throw new GameError('Provider not found');
+    if (!ruleId && office.recurringTasks.filter(r => !r.deletedAt).length >= 100) throw new GameError('Local schedule capacity: 100 definitions');
     const old = ruleId ? this.get(ruleId) : undefined, time = this.time;
     const rule: RecurringTask = { ...data, tools: data.tools.filter(t => employee.tools.includes(t)), id: old?.id || id(), createdAt: old?.createdAt || new Date(time).toISOString(), updatedAt: new Date(time).toISOString() };
     const after = rule.schedule.type === 'once' ? Math.min(time, Date.parse(rule.schedule.runAt) - 1) : time;
     const next = nextOccurrence(rule.schedule, after, Date.parse(rule.createdAt)); rule.nextRunAt = rule.enabled ? next : undefined;
-    if (old) Object.assign(old, rule, { pausedReason: undefined }); else this.s.recurringTasks.push(rule);
+    if (old) Object.assign(old, rule, { pausedReason: undefined }); else office.recurringTasks.push(rule);
     this.engine.emit('schedule.updated', `Schedule saved: ${rule.name}`, rule.id); return old || rule;
   }
   get(ruleId: string) { const r = this.s.recurringTasks.find(r => r.id === ruleId && !r.deletedAt); if (!r) throw new GameError('Schedule not found', 404); return r; }
   action(ruleId: string, action: 'pause' | 'resume' | 'delete' | 'run') {
-    const r = this.get(ruleId), stamp = new Date(this.time).toISOString();
-    if (action === 'run') return this.launch(r, stamp);
+    const office = this.s; const r = this.get(ruleId), stamp = new Date(this.time).toISOString();
+    if (action === 'run') return this.launch(r, stamp, office);
     if (action === 'delete') r.deletedAt = stamp;
     r.enabled = action === 'resume'; r.pausedReason = r.enabled ? undefined : 'Paused by Boss';
     if (r.enabled) { this.engine.employee(r.employeeId); const after = r.schedule.type === 'once' && !r.lastRunAt ? Math.min(this.time, Date.parse(r.schedule.runAt) - 1) : this.time; r.nextRunAt = nextOccurrence(r.schedule, after, Date.parse(r.createdAt)); }
-    else { r.nextRunAt = undefined; for (const pending of this.s.scheduleRuns.filter(s => s.recurringTaskId === r.id && s.nextRetryAt)) { pending.nextRetryAt = undefined; const task = this.s.tasks.find(t => t.id === pending.taskId); if (task?.status === 'BLOCKED') task.status = 'FAILED'; } }
+    else { r.nextRunAt = undefined; for (const pending of office.scheduleRuns.filter(s => s.recurringTaskId === r.id && s.nextRetryAt)) { pending.nextRetryAt = undefined; const task = office.tasks.find(t => t.id === pending.taskId); if (task?.status === 'BLOCKED') task.status = 'FAILED'; } }
     r.updatedAt = stamp; this.engine.emit('schedule.updated', `${r.name}: ${action}`, r.id); return r;
   }
-  private launch(rule: RecurringTask, scheduledAt: string) {
-    const duplicate = this.s.scheduleRuns.find(r => r.recurringTaskId === rule.id && r.scheduledAt === scheduledAt);
+  private launch(rule: RecurringTask, scheduledAt: string, office: Office) {
+    const duplicate = office.scheduleRuns.find(r => r.recurringTaskId === rule.id && r.scheduledAt === scheduledAt);
     if (duplicate) return duplicate;
     const run: ScheduleRun = { id: id(), recurringTaskId: rule.id, employeeId: rule.employeeId, scheduledAt, createdAt: new Date(this.time).toISOString(), status: 'queued', attempt: 1, errors: [] };
-    const employee = this.s.employees.find(e => e.id === rule.employeeId);
-    const overlapping = this.s.scheduleRuns.some(r => r.recurringTaskId === rule.id && (['queued', 'running'].includes(r.status) || !!r.nextRetryAt));
+    const employee = office.employees.find(e => e.id === rule.employeeId);
+    const overlapping = office.scheduleRuns.some(r => r.recurringTaskId === rule.id && (['queued', 'running'].includes(r.status) || !!r.nextRetryAt));
     if (!employee || employee.employmentStatus !== 'active' || employee.tortureId || overlapping) {
-      run.status = 'skipped'; run.errors.push(overlapping ? 'Previous run is still active; overlap skipped.' : 'Employee unavailable (deceased, terminated or in torture room).'); run.completedAt = new Date(this.time).toISOString(); this.s.scheduleRuns.push(run); this.engine.emit('schedule.updated', `${rule.name}: ${run.errors[0]}`, rule.id, rule.notify); return run;
+      run.status = 'skipped'; run.errors.push(overlapping ? 'Previous run is still active; overlap skipped.' : 'Employee unavailable (deceased, terminated or in torture room).'); run.completedAt = new Date(this.time).toISOString(); office.scheduleRuns.push(run); this.engine.emit('schedule.updated', `${rule.name}: ${run.errors[0]}`, rule.id, rule.notify); return run;
     }
-    this.engine.task({ ...rule, title: rule.name, deadline: '' }, { definition: rule, run }); return run;
+    this.engine.task({ ...rule, title: rule.name, deadline: '' }, { definition: rule, run, office }); return run;
   }
-  pauseEmployee(employeeId: string, reason: string) {
-    for (const r of this.s.recurringTasks.filter(r => r.employeeId === employeeId && r.enabled && !r.deletedAt)) { r.enabled = false; r.pausedReason = reason; r.nextRunAt = undefined; }
-    for (const r of this.s.scheduleRuns.filter(r => r.employeeId === employeeId)) r.nextRetryAt = undefined;
+  pauseEmployee(employeeId: string, reason: string, office: Office = this.s) {
+    for (const r of office.recurringTasks.filter(r => r.employeeId === employeeId && r.enabled && !r.deletedAt)) { r.enabled = false; r.pausedReason = reason; r.nextRunAt = undefined; }
+    for (const r of office.scheduleRuns.filter(r => r.employeeId === employeeId)) r.nextRetryAt = undefined;
   }
   reviveEmployee(employeeId: string) {
-    for (const r of this.s.recurringTasks.filter(r => r.employeeId === employeeId && r.pausedReason === 'Employee deceased' && !r.deletedAt)) { r.enabled = true; r.pausedReason = undefined; r.nextRunAt = nextOccurrence(r.schedule, this.time, Date.parse(r.createdAt)); }
+    const office = this.s;
+    for (const r of office.recurringTasks.filter(r => r.employeeId === employeeId && r.pausedReason === 'Employee deceased' && !r.deletedAt)) { r.enabled = true; r.pausedReason = undefined; r.nextRunAt = nextOccurrence(r.schedule, this.time, Date.parse(r.createdAt)); }
   }
   copyTemplates(previousId: string, employeeId: string) {
-    const stamp = new Date(this.time).toISOString();
-    for (const old of this.s.recurringTasks.filter(r => r.employeeId === previousId && !r.deletedAt)) {
+    const office = this.s, stamp = new Date(this.time).toISOString();
+    for (const old of office.recurringTasks.filter(r => r.employeeId === previousId && !r.deletedAt)) {
       const rule = structuredClone(old); rule.id = id(); rule.employeeId = employeeId; rule.copiedFromId = old.id; rule.createdAt = stamp; rule.updatedAt = stamp; rule.lastRunAt = undefined; rule.enabled = old.enabled || old.pausedReason?.startsWith('Employee ') === true; rule.pausedReason = rule.enabled ? undefined : old.pausedReason;
       if (rule.schedule.type === 'once' && Date.parse(rule.schedule.runAt) <= this.time) { rule.enabled = false; rule.pausedReason = 'Expired one-time template; run manually or edit its date'; }
       rule.nextRunAt = rule.enabled ? nextOccurrence(rule.schedule, this.time, this.time) : undefined;
-      old.enabled = false; old.nextRunAt = undefined; old.pausedReason = 'Employee replaced'; old.deletedAt = stamp; this.s.recurringTasks.push(rule);
+      old.enabled = false; old.nextRunAt = undefined; old.pausedReason = 'Employee replaced'; old.deletedAt = stamp; office.recurringTasks.push(rule);
     }
   }
   tick(time = this.time) {
     let changed = false;
-    for (const run of this.s.scheduleRuns) {
-      const task = this.s.tasks.find(t => t.id === run.taskId); if (!task || run.status === 'skipped') continue;
-      const pausedByBoss = task.status === 'BLOCKED' && task.error?.startsWith('Paused by Boss');
-      const status = task.status === 'COMPLETED' ? 'completed' : task.status === 'CANCELLED' || pausedByBoss ? 'cancelled' : ['FAILED', 'BLOCKED'].includes(task.status) ? 'failed' : ['QUEUED', 'WALKING_TO_WORKSTATION'].includes(task.status) ? 'queued' : 'running';
-      const rule = this.s.recurringTasks.find(r => r.id === run.recurringTaskId);
-      if (status !== run.status) {
-        run.status = status; changed = true;
-        if (['completed', 'failed', 'cancelled'].includes(status)) run.completedAt = new Date(time).toISOString();
-        if (status === 'failed') { run.errors.push(task.error || 'Execution failed'); if (rule?.enabled && !rule.deletedAt && rule.retryOnFailure && run.attempt <= rule.maxRetries && !task.error?.includes('Server restarted')) run.nextRetryAt = new Date(time + rule.retryDelayMinutes * 60000).toISOString(); if (!run.nextRetryAt && task.status === 'BLOCKED') task.status = 'FAILED'; }
-        if (status === 'cancelled' || status === 'completed') run.nextRetryAt = undefined;
-        if (status === 'cancelled' && task.error) run.errors.push(task.error);
+    for (const office of this.engine.s.offices) {
+      for (const run of office.scheduleRuns) {
+        const task = office.tasks.find(t => t.id === run.taskId); if (!task || run.status === 'skipped') continue;
+        const pausedByBoss = task.status === 'BLOCKED' && task.error?.startsWith('Paused by Boss');
+        const status = task.status === 'COMPLETED' ? 'completed' : task.status === 'CANCELLED' || pausedByBoss ? 'cancelled' : ['FAILED', 'BLOCKED'].includes(task.status) ? 'failed' : ['QUEUED', 'WALKING_TO_WORKSTATION'].includes(task.status) ? 'queued' : 'running';
+        const rule = office.recurringTasks.find(r => r.id === run.recurringTaskId);
+        if (status !== run.status) {
+          run.status = status; changed = true;
+          if (['completed', 'failed', 'cancelled'].includes(status)) run.completedAt = new Date(time).toISOString();
+          if (status === 'failed') { run.errors.push(task.error || 'Execution failed'); if (rule?.enabled && !rule.deletedAt && rule.retryOnFailure && run.attempt <= rule.maxRetries && !task.error?.includes('Server restarted')) run.nextRetryAt = new Date(time + rule.retryDelayMinutes * 60000).toISOString(); if (!run.nextRetryAt && task.status === 'BLOCKED') task.status = 'FAILED'; }
+          if (status === 'cancelled' || status === 'completed') run.nextRetryAt = undefined;
+          if (status === 'cancelled' && task.error) run.errors.push(task.error);
+        }
+        if (run.nextRetryAt && Date.parse(run.nextRetryAt) <= time && rule?.enabled && !rule.deletedAt) {
+          const employee = office.employees.find(e => e.id === run.employeeId);
+          if (employee?.employmentStatus !== 'active' || employee.tortureId || this.engine.running.has(task.id)) continue;
+          run.nextRetryAt = undefined; run.attempt++; run.status = 'queued'; run.completedAt = undefined;
+          task.status = 'QUEUED'; task.result = ''; task.error = undefined; task.completedAt = undefined; changed = true;
+        }
       }
-      if (run.nextRetryAt && Date.parse(run.nextRetryAt) <= time && rule?.enabled && !rule.deletedAt) {
-        const employee = this.s.employees.find(e => e.id === run.employeeId);
-        if (employee?.employmentStatus !== 'active' || employee.tortureId || this.engine.running.has(task.id)) continue;
-        run.nextRetryAt = undefined; run.attempt++; run.status = 'queued'; run.completedAt = undefined;
-        task.status = 'QUEUED'; task.result = ''; task.error = undefined; task.completedAt = undefined; changed = true;
+      for (const rule of office.recurringTasks) {
+        if (!rule.enabled || rule.deletedAt || !rule.nextRunAt || Date.parse(rule.nextRunAt) > time) continue;
+        const due = rule.nextRunAt; rule.lastRunAt = due;
+        // One catch-up run after downtime, never a burst of missed paid requests.
+        rule.nextRunAt = nextOccurrence(rule.schedule, time, Date.parse(rule.createdAt));
+        this.launch(rule, due, office); changed = true;
       }
-    }
-    for (const rule of this.s.recurringTasks) {
-      if (!rule.enabled || rule.deletedAt || !rule.nextRunAt || Date.parse(rule.nextRunAt) > time) continue;
-      const due = rule.nextRunAt; rule.lastRunAt = due;
-      // One catch-up run after downtime, never a burst of missed paid requests.
-      rule.nextRunAt = nextOccurrence(rule.schedule, time, Date.parse(rule.createdAt));
-      this.launch(rule, due); changed = true;
     }
     if (changed) { this.engine.save(); this.engine.snapshot(true); }
   }

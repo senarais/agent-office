@@ -11,7 +11,7 @@ export const rooms = [
   { id: 'boss', name: 'DIRECTOR', x: 944, y: 448, w: 304, h: 184, color: '#9b926e' },
   { id: 'torture', name: 'TORTURE / HR BASEMENT-ISH', x: 944, y: 648, w: 304, h: 120, color: '#695861' },
 ] as const;
-export interface Furniture extends Rect { id: string; kind: 'desk' | 'shelf' | 'plant' | 'table' | 'sofa' | 'coffee' | 'server' | 'printer' | 'jukebox' | 'board' | 'cabinet' | 'mirror' | 'reception' | 'rig'; label?: string; action?: string; point?: Point }
+export interface Furniture extends Rect { id: string; kind: 'desk' | 'shelf' | 'plant' | 'table' | 'sofa' | 'coffee' | 'server' | 'printer' | 'jukebox' | 'board' | 'cabinet' | 'mirror' | 'reception' | 'rig' | 'door'; label?: string; action?: string; point?: Point }
 export const furniture: Furniture[] = [
   { id: 'books', kind: 'shelf', x: 56, y: 118, w: 112, h: 28 }, { id: 'books2', kind: 'shelf', x: 192, y: 118, w: 96, h: 28 },
   { id: 'research-desk', kind: 'desk', x: 96, y: 208, w: 136, h: 40 },
@@ -34,6 +34,7 @@ export const furniture: Furniture[] = [
   { id: 'punishment-rig', kind: 'rig', x: 968, y: 680, w: 72, h: 32 },
   { id: 'torture-control', kind: 'server', x: 1136, y: 688, w: 48, h: 24, action: 'torture', label: 'Torture room controls', point: { x: 1160, y: 744 } },
   { id: 'reception', kind: 'reception', x: 568, y: 784, w: 160, h: 32, action: 'company', label: 'Reception', point: { x: 648, y: 760 } },
+  { id: 'office-door', kind: 'door', x: 1208, y: 776, w: 32, h: 32, action: 'lobby', label: 'Leave office · switch business', point: { x: 1176, y: 792 } },
   ...[{ x: 272, y: 240 }, { x: 576, y: 112 }, { x: 880, y: 288 }, { x: 1200, y: 160 }, { x: 368, y: 704 }, { x: 880, y: 488 }, { x: 1200, y: 704 }].map((p, i) => ({ ...p, id: `plant${i}`, kind: 'plant' as const, w: 24, h: 24, ...(i === 6 ? { action: 'plant', label: 'Suspiciously resilient fern', point: { x: 1208, y: 744 } } : {}) })),
 ];
 export const walls: Rect[] = [
@@ -41,9 +42,11 @@ export const walls: Rect[] = [
   ...[320, 624, 928].flatMap(x => [{ x, y: 80, w: 16, h: 272 }, { x, y: 448, w: 16, h: 320 }]),
   ...rooms.flatMap(r => [{ x: r.x, y: r.id === 'torture' ? 636 : r.y === 80 ? 344 : 440, w: 104, h: 8 }, { x: r.x + 184, y: r.id === 'torture' ? 636 : r.y === 80 ? 344 : 440, w: r.w - 184, h: 8 }]),
 ];
-export const obstacles = [...walls, ...furniture];
+export const obstacles = [...walls, ...furniture.filter(f => f.kind !== 'door')];
 export const spawn = { x: 648, y: 744 };
 export const exit = { x: 1208, y: 792 };
+/** Where the director enters an office after switching businesses — just inside the door. */
+export const entry = { x: 1140, y: 792 };
 export const punishmentSpot = { x: 1000, y: 728 };
 export const workstations: Record<Department, Point[]> = {
   Research: [{ x: 136, y: 280 }, { x: 200, y: 280 }, { x: 72, y: 280 }, { x: 248, y: 312 }],

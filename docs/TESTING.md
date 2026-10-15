@@ -28,6 +28,8 @@ Tests create independent SQLite databases and local HTTP providers. Coverage inc
 - Real queued/walking/workstation lifecycle; offline task becomes BLOCKED without fabricated output.
 - Official OpenAI SDK against a local OpenAI-compatible HTTP/SSE fixture: model list, auth header, streamed task/chat, report delivery, conversation persistence and encrypted secrets.
 - Official OpenCode SDK against local protocol fixture: session creation, model selection, tool allowlist, streamed/final result.
+- Command Code CLI adapter against a local executable fixture: NDJSON streaming, model list, session resume, tool-bypass flag, abort and friendly missing/unauth errors.
+- Multi-office: staff isolated per business, providers/settings/director shared PT-wide, switching changes the active office, and a scheduled job keeps running in one business while another is active.
 - Nonlethal punch; lethal persistent death; cancellation of in-flight work; no execution by deceased employee.
 - Firing/leaving/vacancy records; violence settings enforced server-side.
 - Pause/cancel/retry and restart recovery without duplicate automatic execution.
@@ -47,7 +49,7 @@ npm run test:e2e
 
 Tests use isolated backend/frontend ports 3101/5175, unique temporary saves, and **explicit DEMO SIMULATION** mode. No live API is required. A real OpenAI smoke case is skipped unless the test process has `OPENAI_API_KEY`.
 
-Browser journey checks actual WASD movement/collision and physical pathfinding to HR, IT and colleagues; HR creation/spawn; provider setup/model assignment; real backend task orchestration through the test adapter; report approach/read/approval; streamed chat; player/employee appearance; actual music playback and jukebox track change/mute; nonlethal punch; persistent firearm death across reload; replacement hire and firing/exit. Separate checks cover a physical two-employee meeting, persisted minutes, editable whiteboard goals, boss-computer apps/analytics, and a 390px viewport without outside-page scrolling.
+Browser journey checks actual WASD movement/collision and physical pathfinding to HR, IT and colleagues; HR creation/spawn; provider setup/model assignment; real backend task orchestration through the test adapter; report approach/read/approval; streamed chat; player/employee appearance; actual music playback and jukebox track change/mute; nonlethal punch; persistent firearm death across reload; replacement hire and firing/exit. Separate checks cover a physical two-employee meeting, persisted minutes, editable whiteboard goals, boss-computer apps/analytics, business switching (the previous office's staff and sprites are fully replaced, with no lingering actors), and a 390px viewport without outside-page scrolling.
 
 Tests call the scene's normal `walkTo` and `approachEmployee` methods to automate long journeys. These use the same A*/movement/collision and live NPC pursuit as canvas clicks, not teleportation. Nearby NPCs are held at the acknowledged server position before automatic dialogue opens. Keyboard E interactions, forms and combat use actual keyboard/click input.
 

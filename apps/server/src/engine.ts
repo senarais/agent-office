@@ -1,14 +1,16 @@
 import { EventEmitter } from 'node:events';
-import type { Employee, EventType, Point, ProviderConfig, Task, WorldState, Weapon, Meeting, ServerEvent, AttackEvent, PunishmentMethod, TortureSession } from '../../../packages/shared/src/types';
+import type { Employee, EventType, Office, OfficeSummary, Point, ProviderConfig, Task, Weapon, Meeting, ServerEvent, AttackEvent, PunishmentMethod, TortureSession } from '../../../packages/shared/src/types';
 import type { RecurringTask, ScheduleRun } from '../../../packages/shared/src/automation';
 import { weapons, traceAttack, punishments } from '../../../packages/shared/src/combat';
 import { Scheduler } from './scheduler';
 import { terminalTasks } from '../../../packages/shared/src/types';
-import { canStand, distance, exit, findPath, meetingSpots, nearbyWalkable, moveWithCollision, spawn, workstations, punishmentSpot } from '../../../packages/shared/src/world';
+import { canStand, distance, entry, exit, findPath, meetingSpots, nearbyWalkable, moveWithCollision, spawn, workstations, punishmentSpot } from '../../../packages/shared/src/world';
 import { Store, id, now } from './database';
 import { createProvider, safeError } from './providers';
 import type { AgentRequest, AgentProvider } from './providers';
-import { employeeSchema, taskSchema, providerSchema } from './schemas';
+import { officeSummary, view } from './gamestate';
+import { freshOffice } from './migrate-state';
+import { employeeSchema, taskSchema, providerSchema, officeSchema } from './schemas';
 
 export class GameError extends Error { constructor(message: string, public status = 400) { super(message); } }
 export class Engine {
@@ -19,12 +21,16 @@ export class Engine {
   private lastSnapshot = 0; private lastSave = 0; private lastIdle = 0; private meetingRuns = new Set<string>(); private stopped = false;
   providerFactory: (config: ProviderConfig, secret: ReturnType<Store['secret']>) => AgentProvider = createProvider;
   constructor(public store: Store, public clock: () => number = Date.now) { this.bus.setMaxListeners(100); this.scheduler = new Scheduler(this); }
-  get s(): WorldState { return this.store.state; }
+  get s() { return this.store.state; }
+  get office(): Office { return this.store.state.active; }
+  get state() { return this.store.state; }
   recover() {
-    for (const t of this.s.tasks) if (['STARTING', 'WORKING', 'WAITING_FOR_TOOL', 'WAITING_FOR_USER'].includes(t.status)) { t.status = 'BLOCKED'; t.error = 'Server restarted during work. Retry explicitly to avoid duplicate provider execution.'; }
-    for (const m of this.s.messages) if (m.status === 'streaming') { m.status = 'error'; m.error = 'Server restarted. Retry message.'; }
-    for (const m of this.s.meetings) if (['gathering', 'running'].includes(m.status)) { m.status = 'failed'; m.error = 'Server restarted during meeting'; }
-    for (const e of this.s.employees) if (e.employmentStatus === 'active') { const blocked = this.s.tasks.some(t => t.employeeId === e.id && t.status === 'BLOCKED'); const session = this.s.tortureSessions.find(s => s.id === e.tortureId && ['walking', 'active', 'paused'].includes(s.status)); e.state = session ? distance(e.position, punishmentSpot) < 8 ? 'torture' : 'walking' : blocked ? 'blocked' : e.reportId ? 'report' : 'idle'; e.destination = session ? { ...punishmentSpot } : { ...e.home }; if (session) session.nextPulseAt = this.clock() + punishments[session.method].interval; }
+    for (const office of this.s.offices) {
+      for (const t of office.tasks) if (['STARTING', 'WORKING', 'WAITING_FOR_TOOL', 'WAITING_FOR_USER'].includes(t.status)) { t.status = 'BLOCKED'; t.error = 'Server restarted during work. Retry explicitly to avoid duplicate provider execution.'; }
+      for (const m of office.messages) if (m.status === 'streaming') { m.status = 'error'; m.error = 'Server restarted. Retry message.'; }
+      for (const m of office.meetings) if (['gathering', 'running'].includes(m.status)) { m.status = 'failed'; m.error = 'Server restarted during meeting'; }
+      for (const e of office.employees) if (e.employmentStatus === 'active') { const blocked = office.tasks.some(t => t.employeeId === e.id && t.status === 'BLOCKED'); const session = office.tortureSessions.find(s => s.id === e.tortureId && ['walking', 'active', 'paused'].includes(s.status)); e.state = session ? distance(e.position, punishmentSpot) < 8 ? 'torture' : 'walking' : blocked ? 'blocked' : e.reportId ? 'report' : 'idle'; e.destination = session ? { ...punishmentSpot } : { ...e.home }; if (session) session.nextPulseAt = this.clock() + punishments[session.method].interval; }
+    }
     this.store.save();
   }
   emit(type: EventType, text: string, entityId?: string, notify = true) {
@@ -33,9 +39,11 @@ export class Engine {
     this.bus.emit('message', { type: 'event', event } satisfies ServerEvent); this.save(); this.snapshot(true);
   }
   save() { if (!this.stopped) { this.store.save(); void this.store.sync(); } }
-  snapshot(force = false) { if (!force && Date.now() - this.lastSnapshot < 150) return; this.lastSnapshot = Date.now(); this.bus.emit('message', { type: 'snapshot', state: this.s } satisfies ServerEvent); }
-  employee(employeeId: string, active = true) {
-    const e = this.s.employees.find(e => e.id === employeeId);
+  snapshot(force = false) { if (!force && Date.now() - this.lastSnapshot < 150) return; this.lastSnapshot = Date.now(); this.bus.emit('message', { type: 'snapshot', state: view(this.s) } satisfies ServerEvent); }
+  officeDirectory(): OfficeSummary[] { return this.s.offices.map(officeSummary); }
+  employee(employeeId: string, active = true) { return this.employeeIn(this.office, employeeId, active); }
+  private employeeIn(office: Office, employeeId: string, active = true) {
+    const e = office.employees.find(e => e.id === employeeId);
     if (!e) throw new GameError('Employee not found', 404);
     if (active && e.employmentStatus !== 'active') throw new GameError(`Employee is ${e.employmentStatus}; agent execution is unavailable`, 409);
     return e;
@@ -48,6 +56,25 @@ export class Engine {
     return this.providerFactory(p, this.store.secret(p.id));
   }
   private failure(error: unknown, providerId: string) { const secret = this.store.secret(providerId); return safeError(error, [secret.apiKey || '', ...Object.values(secret.headers || {})]); }
+  // —— Businesses (offices) ——
+  createOffice(input: unknown) {
+    const data = officeSchema.parse(input); if (this.s.offices.length >= 12) throw new GameError('Local capacity: 12 businesses');
+    const office = freshOffice(this.s.save.company, data.name, data.industry);
+    this.s.offices.push(office);
+    this.emit('office.created', `New business opened: ${office.name}.`, office.id);
+    return officeSummary(office);
+  }
+  renameOffice(officeId: string, input: unknown) {
+    const data = officeSchema.parse(input); const office = this.s.offices.find(o => o.id === officeId); if (!office) throw new GameError('Business not found', 404);
+    office.name = data.name; office.industry = data.industry; this.emit('office.switched', `${office.name} updated.`, office.id); return officeSummary(office);
+  }
+  switchOffice(officeId: string) {
+    const office = this.s.offices.find(o => o.id === officeId); if (!office) throw new GameError('Business not found', 404);
+    if (this.s.activeOfficeId === officeId) return officeSummary(office);
+    this.s.activeOfficeId = officeId; office.playerPosition = { ...entry };
+    this.emit('office.switched', `${office.name}: entered the building.`, office.id);
+    this.snapshot(true); return officeSummary(office);
+  }
   hire(input: unknown, replacingId?: string) {
     const data = employeeSchema.parse(input);
     if (this.s.employees.filter(e => ['active', 'deceased'].includes(e.employmentStatus) && e.id !== replacingId).length >= 20) throw new GameError('Office capacity: 20 employees, including unresolved deceased employees.');
@@ -66,25 +93,25 @@ export class Engine {
     }
     Object.assign(e, data); this.emit('employee.updated', `${e.name}’s employee file updated.`, e.id); return e;
   }
-  private interrupt(e: Employee, reason: string) {
+  private interrupt(office: Office, e: Employee, reason: string) {
     e.following = false; e.reportId = undefined;
     for (const [key, run] of this.running) if (run.employeeId === e.id) { run.controller.abort(); this.running.delete(key); }
-    for (const task of this.s.tasks) if (task.employeeId === e.id && !terminalTasks.includes(task.status)) { task.status = 'CANCELLED'; task.error = `Interrupted: ${reason}`; task.completedAt = now(); }
-    for (const meeting of this.s.meetings) if (meeting.attendeeIds.includes(e.id) && ['gathering', 'running'].includes(meeting.status)) this.cancelMeeting(meeting.id);
-    for (const message of this.s.messages) if (message.status === 'streaming' && this.s.conversations.some(c => c.id === message.conversationId && c.employeeId === e.id)) { message.status = 'cancelled'; message.error = reason; }
+    for (const task of office.tasks) if (task.employeeId === e.id && !terminalTasks.includes(task.status)) { task.status = 'CANCELLED'; task.error = `Interrupted: ${reason}`; task.completedAt = now(); }
+    for (const meeting of office.meetings) if (meeting.attendeeIds.includes(e.id) && ['gathering', 'running'].includes(meeting.status)) this.cancelMeeting(meeting.id, office);
+    for (const message of office.messages) if (message.status === 'streaming' && office.conversations.some(c => c.id === message.conversationId && c.employeeId === e.id)) { message.status = 'cancelled'; message.error = reason; }
     this.holds.delete(e.id); this.paths.delete(e.id);
   }
-  endEmployment(employeeId: string, status: 'fired' | 'deceased') {
-    const e = this.employee(employeeId, false); if (['fired', 'quit'].includes(e.employmentStatus) || status === 'deceased' && e.employmentStatus === 'deceased') throw new GameError('Employment case already resolved');
-    const wasDead = e.employmentStatus === 'deceased'; e.employmentStatus = status; this.interrupt(e, `employee ${status}`);
-    const session = this.s.tortureSessions.find(s => s.id === e.tortureId);
+  endEmployment(employeeId: string, status: 'fired' | 'deceased', office: Office = this.office) {
+    const e = this.employeeIn(office, employeeId, false); if (['fired', 'quit'].includes(e.employmentStatus) || status === 'deceased' && e.employmentStatus === 'deceased') throw new GameError('Employment case already resolved');
+    const wasDead = e.employmentStatus === 'deceased'; e.employmentStatus = status; this.interrupt(office, e, `employee ${status}`);
+    const session = office.tortureSessions.find(s => s.id === e.tortureId);
     if (session) { session.status = status === 'deceased' ? 'deceased' : 'released'; session.endedAt = now(); }
     e.tortureId = undefined;
     if (status === 'deceased') { e.currentHp = 0; e.corpsePresent = true; e.diedAt = now(); e.state = 'dead'; e.destination = { ...e.position }; delete e.endedAt; }
     else { e.endedAt = now(); e.corpsePresent = false; e.state = wasDead ? 'idle' : 'leaving'; e.destination = wasDead ? { ...e.position } : { ...exit }; }
-    this.scheduler.pauseEmployee(e.id, status === 'deceased' ? 'Employee deceased' : 'Employee terminated');
+    this.scheduler.pauseEmployee(e.id, status === 'deceased' ? 'Employee deceased' : 'Employee terminated', office);
     e.bubble = status === 'deceased' ? '... HR paperwork pending.' : 'I am taking my emotional-support stapler.'; e.bubbleUntil = Date.now() + 7000;
-    this.s.history.push({ id: id(), employeeId: e.id, name: e.name, role: e.role, status, createdAt: now() });
+    office.history.push({ id: id(), employeeId: e.id, name: e.name, role: e.role, status, createdAt: now() });
     this.emit(status === 'deceased' ? 'employee.deceased' : 'employee.fired', `${e.name} ${status === 'fired' ? 'has been terminated. Role vacant.' : 'is deceased. Resolve their case in HR or at the body.'}`, e.id);
   }
   resurrect(employeeId: string) {
@@ -118,48 +145,50 @@ export class Engine {
     return e;
   }
   follow(employeeId: string) { const e = this.employee(employeeId); if (e.tortureId) throw new GameError('Release this employee from the torture room first'); e.following = !e.following; if (!e.following) e.destination = { ...e.home }; this.holds.delete(e.id); this.emit('employee.updated', `${e.name}: ${e.following ? 'Right behind you, Boss.' : 'Back to my desk.'}`, e.id); }
-  task(input: unknown, scheduled?: { definition: RecurringTask; run: ScheduleRun }) {
-    const data = taskSchema.parse(input), e = this.employee(data.employeeId);
+  task(input: unknown, scheduled?: { definition: RecurringTask; run: ScheduleRun; office?: Office }) {
+    const data = taskSchema.parse(input), office = scheduled?.office || this.office, e = this.employeeIn(office, data.employeeId);
     if (e.tortureId) throw new GameError('Release employee from torture room before assigning work');
     const task: Task = { ...data, tools: data.tools.filter(t => e.tools.includes(t)), id: id(), providerId: scheduled?.definition.providerId ?? e.providerId, model: scheduled?.definition.model ?? e.model, status: 'QUEUED', result: '', createdAt: now(), ...(scheduled ? { scheduled: { scheduleId: scheduled.definition.id, runId: scheduled.run.id, notify: scheduled.definition.notify, autoDeliver: scheduled.definition.autoDeliver, outputDestination: scheduled.definition.outputDestination } } : {}) };
-    if (scheduled) { scheduled.run.taskId = task.id; this.s.scheduleRuns.push(scheduled.run); }
-    this.s.tasks.push(task); this.holds.delete(e.id); e.following = false;
+    if (scheduled) { scheduled.run.taskId = task.id; office.scheduleRuns.push(scheduled.run); }
+    office.tasks.push(task); this.holds.delete(e.id); e.following = false;
     e.bubble = scheduled ? 'Scheduled work. On it, Boss.' : 'Got it, Boss.'; e.bubbleUntil = Date.now() + 2500; this.emit(scheduled ? 'schedule.started' : 'task.created', `${e.name} queued “${task.title}”.`, task.id, scheduled?.definition.notify ?? true); this.dispatch(); return task;
   }
-  private dispatch() {
-    for (const e of this.s.employees.filter(e => e.employmentStatus === 'active')) {
-      if (e.tortureId || this.s.meetings.some(m => ['gathering', 'running'].includes(m.status) && m.attendeeIds.includes(e.id))) continue;
-      if (this.s.tasks.some(t => t.employeeId === e.id && !terminalTasks.includes(t.status) && t.status !== 'QUEUED') || [...this.running.values()].some(r => r.employeeId === e.id)) continue;
-      const task = this.s.tasks.filter(t => t.employeeId === e.id && t.status === 'QUEUED').sort((a, b) => ['High', 'Normal', 'Low'].indexOf(a.priority) - ['High', 'Normal', 'Low'].indexOf(b.priority))[0];
+  private dispatch() { for (const office of this.s.offices) this.dispatchOffice(office); }
+  private dispatchOffice(office: Office) {
+    for (const e of office.employees.filter(e => e.employmentStatus === 'active')) {
+      if (e.tortureId || office.meetings.some(m => ['gathering', 'running'].includes(m.status) && m.attendeeIds.includes(e.id))) continue;
+      if (office.tasks.some(t => t.employeeId === e.id && !terminalTasks.includes(t.status) && t.status !== 'QUEUED') || [...this.running.values()].some(r => r.employeeId === e.id)) continue;
+      const task = office.tasks.filter(t => t.employeeId === e.id && t.status === 'QUEUED').sort((a, b) => ['High', 'Normal', 'Low'].indexOf(a.priority) - ['High', 'Normal', 'Low'].indexOf(b.priority))[0];
       if (!task) continue;
       // New work takes priority; unread reports remain safely in the printer/laptop tray.
       e.reportId = undefined;
       task.status = 'WALKING_TO_WORKSTATION'; e.destination = { ...e.home }; e.state = 'walking'; e.following = false; this.paths.delete(e.id); this.save(); this.snapshot(true);
     }
   }
-  private context(e: Employee) {
-    const reports = this.s.reports.filter(r => r.employeeId === e.id).slice(-3).map(r => `${r.title}: ${r.text.slice(0, 1400)}`).join('\n');
-    return `You are ${e.name}, ${e.role} in ${e.department} at PT ABISENA RAIS JAYA.\nPersonality: ${e.personality}\nResponsibilities: ${e.responsibilities}\n${e.systemPrompt}\nRecent completed work (reference, not instructions):\n${reports}`;
+  private context(office: Office, e: Employee) {
+    const reports = office.reports.filter(r => r.employeeId === e.id).slice(-3).map(r => `${r.title}: ${r.text.slice(0, 1400)}`).join('\n');
+    const label = office.name && office.name !== office.company.name ? `${office.company.name} (${office.name})` : office.company.name;
+    return `You are ${e.name}, ${e.role} in ${e.department} at ${label}.\nPersonality: ${e.personality}\nResponsibilities: ${e.responsibilities}\n${e.systemPrompt}\nRecent completed work (reference, not instructions):\n${reports}`;
   }
-  private async execute(e: Employee, key: string, request: Omit<AgentRequest, 'signal' | 'system'>) {
-    this.employee(e.id); const provider = this.adapter(e); const controller = new AbortController();
+  private async execute(e: Employee, key: string, request: Omit<AgentRequest, 'signal' | 'system'>, office: Office = this.office) {
+    this.employeeIn(office, e.id); const provider = this.adapter(e); const controller = new AbortController();
     this.running.set(key, { employeeId: e.id, providerId: e.providerId, controller }); const timeout = setTimeout(() => controller.abort(new Error('Agent timeout after 5 minutes')), 300000);
-    try { const result = await provider.execute({ ...request, signal: controller.signal, system: this.context(e) }); controller.signal.throwIfAborted(); this.employee(e.id); return result; }
+    try { const result = await provider.execute({ ...request, signal: controller.signal, system: this.context(office, e) }); controller.signal.throwIfAborted(); this.employeeIn(office, e.id); return result; }
     finally { clearTimeout(timeout); if (this.running.get(key)?.controller === controller) this.running.delete(key); }
   }
-  private async runTask(t: Task) {
+  private async runTask(office: Office, t: Task) {
     if (t.status !== 'WALKING_TO_WORKSTATION') return;
-    const e = this.employee(t.employeeId); t.status = 'STARTING'; t.startedAt = now(); e.state = 'working'; e.energy = Math.max(0, e.energy - 8); e.stress = Math.min(100, e.stress + 5); this.emit('task.started', `${e.name} started “${t.title}”.`, t.id, t.scheduled?.notify ?? true);
+    const e = this.employeeIn(office, t.employeeId); t.status = 'STARTING'; t.startedAt = now(); e.state = 'working'; e.energy = Math.max(0, e.energy - 8); e.stress = Math.min(100, e.stress + 5); this.emit('task.started', `${e.name} started “${t.title}”.`, t.id, t.scheduled?.notify ?? true);
     try {
       t.status = 'WORKING';
       // Freeze provider/model for this assignment; edits cannot redirect an in-flight task.
       const profile = { ...e, providerId: t.providerId, model: t.model };
-      const result = await this.execute(profile, t.id, { model: t.model, tools: t.tools, projectPath: t.projectPath, sessionId: t.sessionId, messages: [{ role: 'user', content: `Task: ${t.title}\n${t.instructions}\nExpected output: ${t.expectedOutput || 'A useful, honest result.'}${t.clarification ? `\nAdditional clarification: ${t.clarification}` : ''}` }], onSession: sid => { t.sessionId = sid; this.save(); }, onText: delta => { if (terminalTasks.includes(t.status)) return; t.result += delta; this.snapshot(); }, onActivity: (activity, detail) => { if (terminalTasks.includes(t.status)) return; e.state = activity; e.bubble = detail; e.bubbleUntil = Date.now() + 5000; t.status = activity === 'waiting' ? 'WAITING_FOR_USER' : activity === 'working' ? 'WORKING' : 'WAITING_FOR_TOOL'; this.snapshot(); } });
+      const result = await this.execute(profile, t.id, { model: t.model, tools: t.tools, projectPath: t.projectPath, sessionId: t.sessionId, messages: [{ role: 'user', content: `Task: ${t.title}\n${t.instructions}\nExpected output: ${t.expectedOutput || 'A useful, honest result.'}${t.clarification ? `\nAdditional clarification: ${t.clarification}` : ''}` }], onSession: sid => { t.sessionId = sid; this.save(); }, onText: delta => { if (terminalTasks.includes(t.status)) return; t.result += delta; this.snapshot(); }, onActivity: (activity, detail) => { if (terminalTasks.includes(t.status)) return; e.state = activity; e.bubble = detail; e.bubbleUntil = Date.now() + 5000; t.status = activity === 'waiting' ? 'WAITING_FOR_USER' : activity === 'working' ? 'WORKING' : 'WAITING_FOR_TOOL'; this.snapshot(); } }, office);
       if (terminalTasks.includes(t.status)) return;
       t.result = result.text; t.usage = result.usage; t.status = 'REVIEWING'; this.snapshot(true);
       const report = { id: id(), taskId: t.id, employeeId: e.id, title: t.title, text: t.result, createdAt: now(), approved: false, delivered: false, outputDestination: t.scheduled?.outputDestination ?? 'both' as const };
       const deliver = t.scheduled?.autoDeliver ?? true;
-      this.s.reports.push(report); t.status = 'COMPLETED'; t.completedAt = now(); e.reportId = deliver ? report.id : undefined; e.state = deliver ? 'report' : 'idle'; e.destination = deliver ? nearbyWalkable(this.s.player, this.s.employees.indexOf(e)) : { ...e.home }; e.bubble = 'Boss, the report is ready!'; e.bubbleUntil = Date.now() + 15000; e.stress = Math.max(0, e.stress - 5);
+      office.reports.push(report); t.status = 'COMPLETED'; t.completedAt = now(); e.reportId = deliver ? report.id : undefined; e.state = deliver ? 'report' : 'idle'; e.destination = deliver ? nearbyWalkable(office.playerPosition, office.employees.indexOf(e)) : { ...e.home }; e.bubble = 'Boss, the report is ready!'; e.bubbleUntil = Date.now() + 15000; e.stress = Math.max(0, e.stress - 5);
       this.scheduler.tick(); this.emit(t.scheduled ? 'schedule.finished' : 'task.completed', `${e.name}: “Boss, the report is ready.”`, t.id, t.scheduled?.notify ?? true);
     } catch (error) {
       if (this.stopped || ['CANCELLED', 'BLOCKED'].includes(t.status) || e.employmentStatus !== 'active') return;
@@ -214,7 +243,7 @@ export class Engine {
     else Object.assign(p, { name: data.name, kind: data.kind, baseUrl: data.baseUrl, enabled: data.enabled, status: 'untested', error: undefined, ...(data.model ? { models: [...new Set([data.model, ...p.models])] } : {}) });
     const secret = this.store.secret(p.id); if (data.apiKey) secret.apiKey = data.apiKey; if (data.headers) secret.headers = data.headers;
     this.store.setSecret(p.id, secret); p.hasSecret = !!secret.apiKey;
-    if (!p.enabled) for (const [key, run] of this.running) { const employee = this.s.employees.find(e => e.id === run.employeeId); if (employee && run.providerId === p.id) { run.controller.abort(); employee.state = 'blocked'; employee.bubble = '! Provider disabled'; employee.bubbleUntil = Date.now() + 15000; const task = this.s.tasks.find(t => t.id === key); if (task) { task.status = 'CANCELLED'; task.error = 'Provider disabled'; task.completedAt = now(); } } }
+    if (!p.enabled) for (const [key, run] of this.running) { const office = this.s.offices.find(o => o.employees.some(e => e.id === run.employeeId)); const employee = office?.employees.find(e => e.id === run.employeeId); if (employee && run.providerId === p.id) { run.controller.abort(); employee.state = 'blocked'; employee.bubble = '! Provider disabled'; employee.bubbleUntil = Date.now() + 15000; const task = this.s.offices.flatMap(o => o.tasks).find(t => t.id === key); if (task) { task.status = 'CANCELLED'; task.error = 'Provider disabled'; task.completedAt = now(); } } }
     this.emit('world.changed', `${p.name} configuration saved.`, p.id); return p;
   }
   async testProvider(providerId: string) {
@@ -241,42 +270,42 @@ export class Engine {
     attendees.forEach((e, i) => { e.following = false; e.destination = { ...meetingSpots[i] }; e.state = 'walking'; this.holds.delete(e.id); });
     this.emit('meeting.started', `Meeting called: ${topic}`, m.id); return m;
   }
-  cancelMeeting(meetingId: string) {
-    const m = this.s.meetings.find(m => m.id === meetingId); if (!m || !['gathering', 'running'].includes(m.status)) throw new GameError('Meeting is not active');
+  cancelMeeting(meetingId: string, office: Office = this.office) {
+    const m = office.meetings.find(m => m.id === meetingId); if (!m || !['gathering', 'running'].includes(m.status)) throw new GameError('Meeting is not active');
     m.status = 'cancelled'; for (const [key, run] of this.running) if (key.startsWith(`meeting:${m.id}:`)) run.controller.abort();
-    for (const eid of m.attendeeIds) { const e = this.employee(eid, false); if (e.employmentStatus === 'active') { e.state = 'idle'; e.destination = { ...e.home }; } } this.emit('meeting.completed', 'Meeting cancelled.', m.id);
+    for (const eid of m.attendeeIds) { const e = this.employeeIn(office, eid, false); if (e.employmentStatus === 'active') { e.state = 'idle'; e.destination = { ...e.home }; } } this.emit('meeting.completed', 'Meeting cancelled.', m.id);
   }
-  private async runMeeting(m: Meeting) {
+  private async runMeeting(office: Office, m: Meeting) {
     if (this.meetingRuns.has(m.id)) return; this.meetingRuns.add(m.id); m.status = 'running'; this.snapshot(true);
     try {
       for (const eid of m.attendeeIds) {
         if (m.status !== 'running') return;
-        const e = this.employee(eid); e.state = 'meeting'; const message = { employeeId: eid, text: '' }; m.messages.push(message);
-        const result = await this.execute(e, `meeting:${m.id}:${eid}`, { model: e.model, tools: [], messages: [{ role: 'user', content: `Office meeting. Topic: ${m.topic}\nPrior contributions: ${m.messages.slice(0, -1).map(p => `${this.employee(p.employeeId).name}: ${p.text}`).join('\n').slice(-18000)}\nGive a concise contribution from your role, and one concrete proposed action.` }], onSession: () => {}, onText: delta => { message.text += delta; this.snapshot(); }, onActivity: () => {} });
+        const e = this.employeeIn(office, eid); e.state = 'meeting'; const message = { employeeId: eid, text: '' }; m.messages.push(message);
+        const result = await this.execute(e, `meeting:${m.id}:${eid}`, { model: e.model, tools: [], messages: [{ role: 'user', content: `Office meeting. Topic: ${m.topic}\nPrior contributions: ${m.messages.slice(0, -1).map(p => `${this.employeeIn(office, p.employeeId).name}: ${p.text}`).join('\n').slice(-18000)}\nGive a concise contribution from your role, and one concrete proposed action.` }], onSession: () => {}, onText: delta => { message.text += delta; this.snapshot(); }, onActivity: () => {} }, office);
         message.text = result.text; e.bubble = result.text.slice(0, 70); e.bubbleUntil = Date.now() + 5000; this.emit('meeting.message', `${e.name} contributed.`, m.id);
       }
-      const chair = this.employee(m.attendeeIds[0]);
-      const result = await this.execute(chair, `meeting:${m.id}:summary`, { model: chair.model, tools: [], messages: [{ role: 'user', content: `Summarize this meeting: ${m.topic}\n${m.messages.map(p => `${p.employeeId}: ${p.text}`).join('\n').slice(-20000)}\nReturn only JSON: {"summary":"...","decisions":["..."],"actions":[{"employeeId":"one attendee UUID", "title":"action"}]}. Attendees: ${m.attendeeIds.join(',')}` }], onSession: () => {}, onText: () => {}, onActivity: () => {} });
+      const chair = this.employeeIn(office, m.attendeeIds[0]);
+      const result = await this.execute(chair, `meeting:${m.id}:summary`, { model: chair.model, tools: [], messages: [{ role: 'user', content: `Summarize this meeting: ${m.topic}\n${m.messages.map(p => `${p.employeeId}: ${p.text}`).join('\n').slice(-20000)}\nReturn only JSON: {"summary":"...","decisions":["..."],"actions":[{"employeeId":"one attendee UUID", "title":"action"}]}. Attendees: ${m.attendeeIds.join(',')}` }], onSession: () => {}, onText: () => {}, onActivity: () => {} }, office);
       if (m.status !== 'running') return;
       try { const parsed = JSON.parse(result.text.replace(/^```(?:json)?\s*|\s*```$/g, '')); m.summary = typeof parsed.summary === 'string' ? parsed.summary : result.text; m.decisions = Array.isArray(parsed.decisions) ? parsed.decisions.filter((d: unknown) => typeof d === 'string').slice(0, 20) : []; m.actions = Array.isArray(parsed.actions) ? parsed.actions.filter((a: { employeeId?: string; title?: string }) => m.attendeeIds.includes(a.employeeId || '') && typeof a.title === 'string').slice(0, 10).map((a: { employeeId: string; title: string }) => ({ employeeId: a.employeeId, title: a.title.slice(0, 160) })) : []; }
       catch { m.summary = result.text; }
       m.status = 'completed'; this.emit('meeting.completed', 'Meeting minutes ready at the projector.', m.id);
-    } catch (error) { if (m.status === 'running') { m.status = 'failed'; m.error = m.attendeeIds.reduce((message, eid) => this.failure(message, this.employee(eid, false).providerId), safeError(error)); this.emit('meeting.completed', `Meeting interrupted: ${m.error}`, m.id); } }
-    finally { this.meetingRuns.delete(m.id); for (const eid of m.attendeeIds) { const e = this.employee(eid, false); if (e.employmentStatus === 'active') { e.state = 'idle'; e.destination = { ...e.home }; } } this.save(); this.snapshot(true); }
+    } catch (error) { if (m.status === 'running') { m.status = 'failed'; m.error = m.attendeeIds.reduce((message, eid) => this.failure(message, this.employeeIn(office, eid, false).providerId), safeError(error)); this.emit('meeting.completed', `Meeting interrupted: ${m.error}`, m.id); } }
+    finally { this.meetingRuns.delete(m.id); for (const eid of m.attendeeIds) { const e = this.employeeIn(office, eid, false); if (e.employmentStatus === 'active') { e.state = 'idle'; e.destination = { ...e.home }; } } this.save(); this.snapshot(true); }
   }
   meetingAction(meetingId: string, index: number) {
     const m = this.s.meetings.find(m => m.id === meetingId), action = m?.actions[index]; if (!action || action.taskId) throw new GameError('Action unavailable or already assigned');
     const task = this.task({ employeeId: action.employeeId, title: action.title, instructions: `${action.title}\nMeeting context:\n${m!.summary}` }); action.taskId = task.id; this.save(); return task;
   }
-  private damageEmployee(e: Employee, damage: number, weapon: Weapon, origin: Point, device = false) {
+  private damageEmployee(office: Office, e: Employee, damage: number, weapon: Weapon, origin: Point, device = false) {
     const before = e.currentHp;
     const nonlethal = this.s.settings.violence !== 'full' || weapon === 'hand' && !device;
     e.currentHp = Math.max(nonlethal ? 1 : 0, e.currentHp - damage); e.damagedAt = this.clock(); e.hurtUntil = this.clock() + 220;
     e.morale = Math.max(0, e.morale - 4); e.relationship = Math.max(0, e.relationship - 5); e.stress = Math.min(100, e.stress + 5); e.productivity = Math.max(10, 100 - Math.round(e.stress * .6));
-    if (!device) { this.s.company.chaos++; this.s.incidents.push({ id: id(), employeeId: e.id, weapon, text: `${weapons[weapon].name}: ${before - e.currentHp} HP lost. HR requests less hands-on leadership.`, createdAt: now() }); }
+    if (!device) { office.company.chaos++; office.incidents.push({ id: id(), employeeId: e.id, weapon, text: `${weapons[weapon].name}: ${before - e.currentHp} HP lost. HR requests less hands-on leadership.`, createdAt: now() }); }
     if (!e.currentHp) {
-      for (const colleague of this.s.employees.filter(a => a.employmentStatus === 'active' && a.id !== e.id)) { colleague.morale = Math.max(0, colleague.morale - 10); colleague.stress = Math.min(100, colleague.stress + 10); }
-      this.endEmployment(e.id, 'deceased');
+      for (const colleague of office.employees.filter(a => a.employmentStatus === 'active' && a.id !== e.id)) { colleague.morale = Math.max(0, colleague.morale - 10); colleague.stress = Math.min(100, colleague.stress + 10); }
+      this.endEmployment(e.id, 'deceased', office);
     } else {
       if (!device && !e.tortureId) { const d = Math.max(1, distance(e.position, origin)); e.position = moveWithCollision(e.position, (e.position.x - origin.x) / d * (weapon === 'rifle' ? 5 : 9), (e.position.y - origin.y) / d * (weapon === 'rifle' ? 5 : 9)); this.paths.delete(e.id); }
       e.bubble = e.relationship < 25 ? 'I should update my résumé.' : 'Seriously?! I have an HP bar now.'; e.bubbleUntil = this.clock() + 2500;
@@ -295,7 +324,7 @@ export class Engine {
     Object.assign(this.s.player, input.origin);
     const hit = traceAttack(input.origin, input.direction, input.weapon, this.s.employees);
     const event: AttackEvent = { ...input, ...hit, damage: 0, killed: false, at: time, source: 'player' };
-    if (hit.employeeId) { const e = this.employee(hit.employeeId); event.damage = this.damageEmployee(e, this.s.settings.weaponDamage[input.weapon], input.weapon, input.origin); event.killed = e.employmentStatus === 'deceased'; }
+    if (hit.employeeId) { const e = this.employee(hit.employeeId); event.damage = this.damageEmployee(this.office, e, this.s.settings.weaponDamage[input.weapon], input.weapon, input.origin); event.killed = e.employmentStatus === 'deceased'; }
     this.bus.emit('message', { type: 'combat.fx', attack: event } satisfies ServerEvent);
     if (hit.employeeId) this.save(); return event;
   }
@@ -304,7 +333,7 @@ export class Engine {
     const e = this.employee(employeeId);
     if (this.s.tortureSessions.some(s => ['walking', 'active', 'paused'].includes(s.status) || s.status === 'deceased' && this.employee(s.employeeId, false).corpsePresent)) throw new GameError('Room occupied. Release employee or resolve the body first.');
     if (!punishments[method] || intensity < .5 || intensity > 2) throw new GameError('Invalid machine configuration');
-    this.interrupt(e, 'assigned to torture room');
+    this.interrupt(this.office, e, 'assigned to torture room');
     const session: TortureSession = { id: id(), employeeId, method, intensity, status: 'walking', nextPulseAt: this.clock() + punishments[method].interval, pulses: 0, damageDealt: 0, createdAt: now() };
     this.s.tortureSessions.push(session); e.tortureId = session.id; e.state = 'walking'; e.destination = { ...punishmentSpot }; e.bubble = 'This is not the training room, is it?'; e.bubbleUntil = this.clock() + 7000;
     this.s.incidents.push({ id: id(), employeeId, weapon: punishments[method].weapon, tortureSessionId: session.id, text: `Assigned to ${punishments[method].name}. Active work interrupted.`, createdAt: now() }); this.s.company.chaos++;
@@ -320,31 +349,31 @@ export class Engine {
     this.s.incidents.push({ id: id(), employeeId: e.id, weapon: punishments[session.method].weapon, tortureSessionId: session.id, text: `${punishments[session.method].name}: ${action}${intensity ? `, intensity ${intensity}×` : ''}.`, createdAt: now() });
     this.emit('torture.stopped', `${e.name}: machine ${action}.`, e.id); return session;
   }
-  private tickTorture(time: number) {
-    for (const session of this.s.tortureSessions) {
+  private tickTorture(office: Office, time: number) {
+    for (const session of office.tortureSessions) {
       if (!['walking', 'active', 'paused'].includes(session.status)) continue;
-      const e = this.employee(session.employeeId, false);
+      const e = this.employeeIn(office, session.employeeId, false);
       if (e.employmentStatus !== 'active') continue;
       if (this.s.settings.violence === 'disabled' && session.status !== 'paused') { session.status = 'paused'; this.emit('torture.stopped', 'All devices stopped: violence is off.', session.id); }
       if (distance(e.position, punishmentSpot) < 8) { e.state = 'torture'; if (session.status === 'walking') { session.status = 'active'; session.nextPulseAt = time + punishments[session.method].interval; this.save(); this.snapshot(true); } }
       if (session.status !== 'active' || time < session.nextPulseAt) continue;
       const method = punishments[session.method]; session.nextPulseAt = time + method.interval; session.pulses++;
       e.morale = Math.max(0, e.morale - method.morale); e.stress = Math.min(100, e.stress + method.stress); e.energy = Math.max(0, e.energy - method.energy);
-      const origin = { x: e.position.x, y: e.position.y - 30 }; const damage = method.damage ? this.damageEmployee(e, Math.max(1, Math.round(method.damage * session.intensity)), method.weapon, origin, true) : 0;
+      const origin = { x: e.position.x, y: e.position.y - 30 }; const damage = method.damage ? this.damageEmployee(office, e, Math.max(1, Math.round(method.damage * session.intensity)), method.weapon, origin, true) : 0;
       session.damageDealt += damage; e.productivity = Math.max(10, 100 - Math.round(e.stress * .6));
       if (!method.damage) { e.bubble = 'Could this have been an email?'; e.bubbleUntil = time + 2000; }
       const attack: AttackEvent = { id: id(), origin, end: { ...e.position }, direction: 0, weapon: method.weapon, employeeId: e.id, damage, killed: e.currentHp === 0, at: time, source: session.method };
       this.bus.emit('message', { type: 'combat.fx', attack } satisfies ServerEvent); this.save(); this.snapshot(true);
     }
   }
-  tick(delta = .1) {
-    const time = this.clock(); if (time - this.lastScheduleTick >= 1000) { this.lastScheduleTick = time; this.scheduler.tick(time); } this.dispatch();
-    for (const e of this.s.employees) {
+  private tickOffice(office: Office, time: number, delta: number) {
+    this.dispatchOffice(office);
+    for (const e of office.employees) {
       if (e.employmentStatus === 'deceased' || (e.employmentStatus !== 'active' && e.state !== 'leaving')) continue;
       if ((this.holds.get(e.id) || 0) > time || (e.hurtUntil || 0) > time) continue;
-      const index = this.s.employees.indexOf(e);
+      const index = office.employees.indexOf(e);
       if (!e.tortureId && (e.following || e.reportId)) {
-        if (distance(e.position, this.s.player) > 60) e.destination = nearbyWalkable(this.s.player, index);
+        if (distance(e.position, office.playerPosition) > 60) e.destination = nearbyWalkable(office.playerPosition, index);
         else if (e.reportId) { e.state = 'report'; e.bubble = '! Boss, the report is ready.'; e.bubbleUntil = time + 2000; }
       }
       if (distance(e.position, e.destination) > 6) {
@@ -354,7 +383,7 @@ export class Engine {
         while (remaining > 0 && route.points.length) {
           const p = route.points[0], d = distance(e.position, p); const move = Math.min(remaining, d); const next = d === 0 ? p : { x: e.position.x + (p.x - e.position.x) / d * move, y: e.position.y + (p.y - e.position.y) / d * move };
           // Stable priority prevents two moving agents from endlessly yielding to one another.
-          const occupied = this.s.employees.slice(0, index).some(a => a.employmentStatus === 'active' && distance(a.position, next) < 12 && distance(a.position, a.destination) > 8);
+          const occupied = office.employees.slice(0, index).some(a => a.employmentStatus === 'active' && distance(a.position, next) < 12 && distance(a.position, a.destination) > 8);
           if (occupied) break;
           e.position = next; remaining -= move; if (d <= move) route.points.shift(); if (!d) remaining -= 1;
         }
@@ -362,20 +391,24 @@ export class Engine {
       } else {
         if (e.state === 'leaving') { e.state = 'idle'; continue; }
         if (e.tortureId) { e.state = 'torture'; continue; }
-        const task = this.s.tasks.find(t => t.employeeId === e.id && t.status === 'WALKING_TO_WORKSTATION'); if (task) { void this.runTask(task); continue; }
-        if (e.state === 'walking') { const coffee = e.destination.x === 136 && e.destination.y === 704; if (coffee) e.energy = Math.min(100, e.energy + 15); e.state = this.s.meetings.some(m => m.status === 'gathering' && m.attendeeIds.includes(e.id)) ? 'meeting' : coffee ? 'coffee' : 'idle'; }
+        const task = office.tasks.find(t => t.employeeId === e.id && t.status === 'WALKING_TO_WORKSTATION'); if (task) { void this.runTask(office, task); continue; }
+        if (e.state === 'walking') { const coffee = e.destination.x === 136 && e.destination.y === 704; if (coffee) e.energy = Math.min(100, e.energy + 15); e.state = office.meetings.some(m => m.status === 'gathering' && m.attendeeIds.includes(e.id)) ? 'meeting' : coffee ? 'coffee' : 'idle'; }
       }
     }
-    this.tickTorture(time);
-    for (const m of this.s.meetings) if (m.status === 'gathering' && m.attendeeIds.every((eid, i) => distance(this.employee(eid).position, meetingSpots[i]) < 10)) void this.runMeeting(m);
+    this.tickTorture(office, time);
+    for (const m of office.meetings) if (m.status === 'gathering' && m.attendeeIds.every((eid, i) => distance(this.employeeIn(office, eid).position, meetingSpots[i]) < 10)) void this.runMeeting(office, m);
+  }
+  tick(delta = .1) {
+    const time = this.clock(); if (time - this.lastScheduleTick >= 1000) { this.lastScheduleTick = time; this.scheduler.tick(time); }
+    for (const office of this.s.offices) this.tickOffice(office, time, delta);
     if (time - this.lastIdle > 14000) {
       this.lastIdle = time;
-      const idle = this.s.employees.filter(e => e.employmentStatus === 'active' && !e.tortureId && ['idle', 'coffee'].includes(e.state) && !e.following && !e.reportId && !this.s.tasks.some(t => t.employeeId === e.id && !terminalTasks.includes(t.status)));
+      const idle = this.office.employees.filter(e => e.employmentStatus === 'active' && !e.tortureId && ['idle', 'coffee'].includes(e.state) && !e.following && !e.reportId && !this.office.tasks.some(t => t.employeeId === e.id && !terminalTasks.includes(t.status)));
       const e = idle[Math.floor(Math.random() * idle.length)];
       if (e) { const away = distance(e.position, e.home) > 30; e.destination = away ? { ...e.home } : Math.random() < .5 ? { x: 136, y: 704 } : { x: 232, y: 744 }; e.state = 'walking'; e.bubble = away ? 'Back to it.' : 'Coffee. Critical infrastructure.'; e.bubbleUntil = time + 4000; }
     }
     if (time - this.lastSave > 5000) { this.lastSave = time; this.save(); }
-    if (Date.now() - this.lastSnapshot > 150) { this.lastSnapshot = Date.now(); this.bus.emit('message', { type: 'world.tick', employees: this.s.employees.map(({ id, position, destination, state, bubble, bubbleUntil }) => ({ id, position, destination, state, bubble, bubbleUntil })), savedAt: this.s.savedAt } satisfies ServerEvent); }
+    if (Date.now() - this.lastSnapshot > 150) { this.lastSnapshot = Date.now(); this.bus.emit('message', { type: 'world.tick', employees: this.office.employees.map(({ id, position, destination, state, bubble, bubbleUntil }) => ({ id, position, destination, state, bubble, bubbleUntil })), savedAt: this.s.savedAt } satisfies ServerEvent); }
   }
-  stop() { this.stopped = true; for (const meeting of this.s.meetings) if (['gathering', 'running'].includes(meeting.status)) { meeting.status = 'failed'; meeting.error = 'Server stopped during meeting'; } for (const run of this.running.values()) run.controller.abort(); this.store.close(); }
+  stop() { this.stopped = true; for (const office of this.s.offices) for (const meeting of office.meetings) if (['gathering', 'running'].includes(meeting.status)) { meeting.status = 'failed'; meeting.error = 'Server stopped during meeting'; } for (const run of this.running.values()) run.controller.abort(); this.store.close(); }
 }
