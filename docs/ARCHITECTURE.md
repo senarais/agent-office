@@ -37,7 +37,8 @@ No page router or dashboard navigation. React only owns title/HUD and pixel wind
 
 | File | Responsibility |
 | --- | --- |
-| `packages/shared/src/types.ts` | Employee/task/provider/message/report/meeting records and SSE event union |
+| `packages/shared/src/types.ts` | Employee/task/provider/message/report/meeting records, integrations and SSE event union |
+| `packages/shared/src/social.ts` | Social campaign/options/posts/publish records and tolerant creative-JSON parser |
 | `packages/shared/src/world.ts` | Canonical compact map, interaction points, collision footprints, workstations, A* |
 | `apps/game/src/game/OfficeScene.ts` | Input, movement, interpolation, interactions, animation, camera, world effects |
 | `apps/game/src/game/art.ts` | Original cached furniture/character textures |
@@ -47,6 +48,9 @@ No page router or dashboard navigation. React only owns title/HUD and pixel wind
 | `apps/server/src/api.ts` | Local trust boundary, validation and HTTP/SSE transport |
 | `apps/server/src/engine.ts` | Authoritative employees, movement, task queues, agent orchestration and consequences |
 | `apps/server/src/providers.ts` | Provider-independent execution contract and concrete adapters |
+| `apps/server/src/telegram.ts` | Long-polled Telegram bot, report/review notifications and approval callbacks |
+| `apps/server/src/social.ts` | Signed publishing/analytics/media automation boundary and webhook secret verification |
+| `apps/server/src/integrations.ts` | Secret-free integration status shared with the browser |
 | `apps/server/src/database.ts` | SQLite checkpoints, encrypted vault, Supabase replication/restore |
 
 ## Movement and authority
@@ -85,6 +89,14 @@ Pausing is explicitly cancel-and-preserve-context, not native suspension. Clarif
 Completion saves report before directing employee toward boss. Nearby approach displays an exclamation/dialogue cue. Reading or approving report releases employee back to work. Reports remain available through printer, dialogue or boss laptop.
 
 Meetings gather 1–6 available agents at unique seats. Agents contribute sequentially with shared topic and prior messages. The first attendee synthesizes minutes using a real provider call. Structured decisions/action items are used only if model returns valid fields; otherwise original text is retained, never replaced with invented minutes. Action conversion uses the real task queue and is idempotent per item.
+
+## Telegram and social publishing
+
+Telegram is an optional bridge, not a second source of truth. The engine owns all state changes; `telegram.ts` only transports messages and maps authorized chats/callbacks back to `reportAction`, `approveSocialCampaign`, `reviseSocialCampaign` and the scheduler. It long-polls the Bot API, so no inbound webhook is exposed. Only `TELEGRAM_CHAT_ID` may act. Report delivery is recorded on the report; scheduled tasks freeze `telegramNotify` at queue time.
+
+The Social Media division adds a campaign record per content brief. `createSocialCampaign` creates a normal Creative task. On completion, the engine parses the task result into options, optionally generates media through `MEDIA_WEBHOOK_URL` or OpenAI Images, marks the campaign `review`, and notifies Telegram. Approval selects one option and calls `SOCIAL_WEBHOOK_URL` with a stable idempotency key; failures are persisted, never converted into fake success. Revision creates another real Creative task with the previous options and the director's feedback, then appends new options. Analytics are pulled from `SOCIAL_ANALYTICS_URL` or the shared webhook with `action: analytics`, or pushed to a secret-authenticated callback.
+
+Platform credentials remain outside this application. The office only knows platform names, captions, media URLs and public metrics. Signed outgoing calls use `X-Social-Signature` (HMAC-SHA256); inbound automation calls use `x-social-secret` and bypass the browser session token but no other localhost/origin checks.
 
 ## Durable state
 

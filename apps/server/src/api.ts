@@ -1,16 +1,24 @@
 import Fastify from 'fastify';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { z } from 'zod';
 import { Engine, GameError } from './engine';
 import { Store } from './database';
 import { appearanceSchema, parseSettings, weaponSchema, punishmentSchema } from './schemas';
 import { safeError } from './providers';
 import { view } from './gamestate';
+import { SocialService, verifySocialSecret } from './social';
+import { TelegramService } from './telegram';
 import { canStand } from '../../../packages/shared/src/world';
 import type { ServerEvent } from '../../../packages/shared/src/types';
+import type { SocialAnalyticsPayload } from '../../../packages/shared/src/social';
 
 export async function createApp(directory = process.env.DATA_DIR || '.local-data', ticking = true) {
   const store = new Store(directory); await store.restore(); const engine = new Engine(store); engine.recover();
+  const openai = engine.s.providers.find(p => p.kind === 'openai');
+  engine.social = new SocialService({ directory, openaiKey: process.env.OPENAI_API_KEY || (openai ? store.secret(openai.id).apiKey : ''), imageModel: process.env.OPENAI_IMAGE_MODEL || '' });
+  const telegram = new TelegramService(engine); engine.telegram = telegram; telegram.start();
   const app = Fastify({ logger: false, bodyLimit: 131072 }); const token = randomBytes(32).toString('hex');
   const equal = (candidate: unknown) => typeof candidate === 'string' && candidate.length === token.length && timingSafeEqual(Buffer.from(candidate), Buffer.from(token));
   app.addHook('onRequest', async (req, reply) => {
@@ -20,7 +28,9 @@ export async function createApp(directory = process.env.DATA_DIR || '.local-data
     const origin = req.headers.origin;
     if (origin) { let url: URL; try { url = new URL(origin); } catch { throw new GameError('Invalid origin', 403); } if (!['http:', 'https:'].includes(url.protocol) || !['localhost', '127.0.0.1'].includes(url.hostname) || !['5173', '3001', process.env.GAME_PORT || '5173', process.env.PORT || '3001'].includes(url.port)) throw new GameError('Origin rejected', 403); }
     if (req.headers['sec-fetch-site'] === 'cross-site') throw new GameError('Cross-site request rejected', 403);
-    if (!['GET', 'HEAD'].includes(req.method) && !equal(req.headers['x-office-token'])) throw new GameError('Local session expired. Reload the office.', 403);
+    const requestPath = req.url.split('?')[0];
+    const automationCallback = requestPath === '/api/social/analytics' || requestPath === '/api/social/callback';
+    if (!['GET', 'HEAD'].includes(req.method) && !automationCallback && !equal(req.headers['x-office-token'])) throw new GameError('Local session expired. Reload the office.', 403);
     if (req.url === '/api/events' && !equal((req.headers.cookie || '').split(';').map(s => s.trim()).find(s => s.startsWith('office_session='))?.slice(15))) throw new GameError('Start the local game first', 403);
   });
   app.setErrorHandler((error, _req, reply) => { const status = error instanceof GameError ? error.status : error instanceof z.ZodError ? 400 : 500; reply.status(status).send({ error: error instanceof z.ZodError ? error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ') : safeError(error) }); });
@@ -57,6 +67,30 @@ export async function createApp(directory = process.env.DATA_DIR || '.local-data
   app.post('/api/offices/switch', req => engine.switchOffice(z.object({ id: z.string().max(80) }).parse(req.body).id));
   app.put<{ Params: { id: string } }>('/api/offices/:id', req => engine.renameOffice(req.params.id, req.body));
   app.post<{ Params: { id: string } }>('/api/reports/:id/action', req => { const b = z.object({ action: z.enum(['read', 'approve', 'revise', 'archive', 'followup']), instructions: z.string().max(10000).optional() }).parse(req.body); return engine.reportAction(req.params.id, b.action, b.instructions); });
+  app.post<{ Params: { id: string } }>('/api/reports/:id/telegram', req => engine.sendReportToTelegram(req.params.id));
+  app.post('/api/telegram/test', async () => { if (!engine.telegram?.configured) throw new GameError('Telegram is not configured. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID, then restart the local server.', 409); await engine.telegram.sendText('PT ABISENA RAIS JAYA · Telegram test successful.'); return { ok: true }; });
+  app.post('/api/social/campaigns', req => engine.createSocialCampaign(req.body));
+  app.post<{ Params: { id: string } }>('/api/social/campaigns/:id/approve', req => { const b = z.object({ optionId: z.string().uuid() }).parse(req.body); return engine.approveSocialCampaign(req.params.id, b.optionId, 'director'); });
+  app.post<{ Params: { id: string } }>('/api/social/campaigns/:id/revise', req => { const b = z.object({ instructions: z.string().trim().min(1).max(10000) }).parse(req.body); return engine.reviseSocialCampaign(req.params.id, b.instructions); });
+  app.post<{ Params: { id: string } }>('/api/social/campaigns/:id/cancel', req => engine.cancelSocialCampaign(req.params.id));
+  app.post('/api/social/analytics/sync', () => engine.syncSocialAnalytics());
+  app.post('/api/social/analytics', { bodyLimit: 2 * 1024 * 1024 }, req => {
+    if (!verifySocialSecret(req.headers['x-social-secret'])) throw new GameError('Invalid social webhook secret', 403);
+    const b = z.object({ accounts: z.array(z.any()).optional(), posts: z.array(z.any()).optional() }).parse(req.body);
+    return engine.ingestSocialAnalytics(engine.office, b as SocialAnalyticsPayload);
+  });
+  app.post('/api/social/callback', req => {
+    if (!verifySocialSecret(req.headers['x-social-secret'])) throw new GameError('Invalid social webhook secret', 403);
+    const b = z.object({ publishId: z.string().max(80).optional(), idempotencyKey: z.string().max(200).optional(), status: z.enum(['published', 'failed', 'unknown']), externalId: z.string().max(300).optional(), url: z.string().max(1000).optional(), error: z.string().max(2000).optional() }).parse(req.body);
+    return engine.socialPublishCallback(b);
+  });
+  app.get<{ Params: { file: string } }>('/api/media/:file', (req, reply) => {
+    if (!/^[a-f0-9-]+\.(png|jpe?g|webp|mp4)$/i.test(req.params.file)) throw new GameError('Media not found', 404);
+    const path = join(directory, 'media', req.params.file);
+    if (!existsSync(path)) throw new GameError('Media not found', 404);
+    const extension = req.params.file.split('.').pop()!.toLowerCase();
+    return reply.type(extension === 'mp4' ? 'video/mp4' : `image/${extension === 'jpg' ? 'jpeg' : extension}`).send(readFileSync(path));
+  });
   app.post('/api/meetings', req => { const b = z.object({ topic: z.string().min(1).max(4000), attendeeIds: z.array(z.string().uuid()).min(1).max(6) }).parse(req.body); return engine.meeting(b.topic, b.attendeeIds); });
   app.post<{ Params: { id: string } }>('/api/meetings/:id/cancel', req => { engine.cancelMeeting(req.params.id); return { ok: true }; });
   app.post<{ Params: { id: string } }>('/api/meetings/:id/action', req => engine.meetingAction(req.params.id, z.object({ index: z.number().int().min(0).max(9) }).parse(req.body).index));
@@ -74,6 +108,6 @@ export async function createApp(directory = process.env.DATA_DIR || '.local-data
   app.post('/api/coffee', req => { const b = z.object({ source: z.enum(['machine', 'inventory', 'energy']).default('machine') }).parse(req.body || {}); if (b.source === 'inventory') { if (!engine.s.player.coffee) throw new GameError('No coffee left'); engine.s.player.coffee--; } else if (b.source === 'energy') { if (!engine.s.player.energyDrinks) throw new GameError('No energy drinks left'); engine.s.player.energyDrinks--; } else engine.s.player.coffee = Math.min(9, engine.s.player.coffee + 1); if (b.source !== 'machine') engine.s.player.caffeinatedUntil = Date.now() + 60000; engine.emit('world.changed', b.source === 'machine' ? 'Coffee acquired. Productivity is mostly a beverage.' : 'Caffeinated for one minute. Small cup. Big stride.'); return engine.s.player; });
   app.post('/api/save', async () => { engine.save(); await store.sync(true); engine.snapshot(true); return { savedAt: engine.s.savedAt, storage: engine.s.storage }; });
   const timer = ticking ? setInterval(() => engine.tick(.1), 100) : undefined;
-  app.addHook('onClose', async () => { if (timer) clearInterval(timer); engine.stop(); });
+  app.addHook('onClose', async () => { if (timer) clearInterval(timer); telegram.stop(); engine.stop(); });
   return { app, engine };
 }

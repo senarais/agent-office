@@ -14,7 +14,7 @@ const scheduleSchema = z.object({
 export const recurringSchema = z.object({
   name: z.string().trim().min(1).max(140), description: z.string().max(2000).default(''), employeeId: z.string().uuid(), providerId: z.string().max(80).default(''), model: z.string().max(160).default(''),
   instructions: z.string().trim().min(1).max(30000), expectedOutput: z.string().max(3000).default(''), projectPath: z.string().max(1024).default(''), tools: z.array(z.string().max(30)).max(10).default([]), priority: z.enum(['Low', 'Normal', 'High']).default('Normal'),
-  schedule: scheduleSchema, outputDestination: z.enum(['printer', 'laptop', 'both']).default('both'), notify: z.boolean().default(true), autoDeliver: z.boolean().default(true),
+  schedule: scheduleSchema, outputDestination: z.enum(['printer', 'laptop', 'both']).default('both'), notify: z.boolean().default(true), autoDeliver: z.boolean().default(true), telegramNotify: z.boolean().default(false),
   retryOnFailure: z.boolean().default(false), maxRetries: z.number().int().min(0).max(3).default(1), retryDelayMinutes: z.number().int().min(1).max(1440).default(5), enabled: z.boolean().default(true),
 });
 

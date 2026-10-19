@@ -1,5 +1,20 @@
 # Development notes
 
+## Revision 4 — Telegram delivery and the Social Media division
+
+Implementation decisions:
+- Telegram uses Bot API long-polling from the local server, so approvals work without a public webhook or tunnel. Only chat ids listed in `TELEGRAM_CHAT_ID` may approve or revise. Outbound report chunks are capped below the Bot API limit; inline callbacks use short stable prefixes.
+- Report delivery is durable per report (`sent` / `failed` / `not-configured`), with a global default for manual assignments and a per-schedule `telegramNotify` flag frozen into each scheduled task. Creative-pipeline JSON reports do not leak into the Telegram report queue; the campaign review notification is the relevant message.
+- Social Media is a sixth department with four reachable workstations and a studio desk in the open office. The engine owns the pipeline; CI/agent interaction remains the existing task/report executor.
+- Creative agents return strict JSON options. The parser tolerates markdown fences and wrapper objects, and falls back to one reviewable text option rather than discarding prose. Media prompts are generated in parallel when a media connector exists; missing media is recorded as an option error, never replaced with fake files.
+- Approval selects one option, freezes an idempotency key, and calls a signed user-owned automation webhook. Publishing failures are surfaced on the campaign and in Telegram. Asynchronous workflow confirmations are accepted through a secret-authenticated callback.
+- Analytics are ingested from a user-owned analytics endpoint or pushed callback. Metrics are merged by platform + external id/permalink, and unknown values stay unavailable rather than being estimated.
+- No platform OAuth or credentials are stored by the office. `SOCIAL_WEBHOOK_URL` and optional `SOCIAL_ANALYTICS_URL` / `MEDIA_WEBHOOK_URL` hold the integration boundary; `SOCIAL_WEBHOOK_SECRET` authenticates both directions.
+- Supabase receives additive `social_*` replica tables and a generated `telegram_notify` column. Existing saves gain empty social arrays and `telegramNotify: false` without touching staff or histories.
+- Ready-made n8n publish/analytics workflows live under `docs/n8n/`. They authenticate with n8n Header Auth (`X-Social-Secret`) and keep account IDs in a Config node because n8n 2.43 blocks `$env` access inside expressions. Platform OAuth tokens still require the user to connect their own accounts.
+
+Verification targets: backend tests for option parsing, media/review/publish/revision lifecycle, global and per-schedule Telegram toggles, analytics deduplication, and signed callbacks; TypeScript/build; browser smoke via the existing Playwright harness.
+
 ## Revision 2 — scheduled work and arcade gameplay
 
 Before implementation, re-inspected all five office references plus the six combat/art references. LPC generators inform ordered character/equipment layers and per-action frame timing, not imported art (LPC assets carry individual attribution/share-alike requirements). Pixel Effect Generator informs bounded deterministic square-particle bursts. Street-fighter-game informs anticipation/impact/recovery and hitboxes; Top-Down-Shooter informs immediate muzzle feedback, directional hit tests and reusable effect pools. Tiddybub is an asset discovery index only: check original licenses. New sounds will come directly from Kenney CC0 Impact Sounds / Digital Audio. Pixabay license page returned HTTP 403, so no Pixabay asset is used.

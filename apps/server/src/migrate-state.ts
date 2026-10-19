@@ -28,6 +28,7 @@ function fromSingleOffice(old: WorldState): GameSave {
     employees: old.employees || [], tasks: old.tasks || [], conversations: old.conversations || [], messages: old.messages || [],
     reports: old.reports || [], meetings: old.meetings || [], recurringTasks: old.recurringTasks || [], scheduleRuns: old.scheduleRuns || [],
     tortureSessions: old.tortureSessions || [], history: old.history || [], incidents: old.incidents || [],
+    socialAccounts: [], socialPosts: [], socialCampaigns: [], socialPublishes: [],
     playerPosition: { x: old.player?.x ?? spawn.x, y: old.player?.y ?? spawn.y },
   };
   return normalizeSave({ version: 3, company: { id: company.id, name: company.name }, settings, providers: old.providers || [], director, activeOfficeId: office.id, offices: [office], events: old.events || [], savedAt: old.savedAt || new Date().toISOString(), storage: old.storage || { mode: 'local' } });
@@ -51,6 +52,8 @@ function normalizeSave(save: GameSave): GameSave {
     office.company = { id: office.company?.id || save.company?.id || randomUUID(), name: office.company?.name || save.company?.name || 'PT ABISENA RAIS JAYA', motto: office.company?.motto ?? '', chaos: office.company?.chaos ?? 0, wallColor: office.company?.wallColor ?? '#597264', plants: office.company?.plants ?? true, goals: office.company?.goals ?? '' };
     office.employees ??= []; office.tasks ??= []; office.conversations ??= []; office.messages ??= []; office.reports ??= []; office.meetings ??= [];
     office.recurringTasks ??= []; office.scheduleRuns ??= []; office.tortureSessions ??= []; office.history ??= []; office.incidents ??= [];
+    office.socialAccounts ??= []; office.socialPosts ??= []; office.socialCampaigns ??= []; office.socialPublishes ??= [];
+    for (const rule of office.recurringTasks) rule.telegramNotify ??= false;
     office.playerPosition ??= { ...entry };
     if (!canStand(office.playerPosition)) office.playerPosition = { ...entry };
     for (const e of office.employees) {
@@ -69,6 +72,7 @@ export function freshOffice(company: { id: string; name: string }, name?: string
     id: randomUUID(), name: name || company.name, industry, createdAt: new Date().toISOString(),
     company: { id: company.id, name: company.name, motto: 'Building companies, one agent at a time.', chaos: 0, wallColor: '#597264', plants: true, goals: 'Hire our first colleague. Make something worthwhile.' },
     employees: [], tasks: [], conversations: [], messages: [], reports: [], meetings: [], recurringTasks: [], scheduleRuns: [], tortureSessions: [], history: [], incidents: [],
+    socialAccounts: [], socialPosts: [], socialCampaigns: [], socialPublishes: [],
     playerPosition: { ...entry },
   };
 }

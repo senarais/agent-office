@@ -1,8 +1,14 @@
 # Verification and regression checks
 
+## Revision 4 checks
+
+`npm test` now also runs `social.test.ts`: tolerant creative-JSON parsing (fences/wrappers/prose fallback), real Creative task execution into reviewable media options, Telegram approval and publishing through a fixture automation connector, revision loops that append options, global and per-schedule Telegram report toggles, analytics deduplication/engagement math, and signed automation callbacks that bypass the browser token only with the shared secret.
+
+Browser flows exercise the expanded boss computer (14 apps), the new Social media studio screen reachable from the world, and the existing combat/HR flows. The Social media campaign lint is covered by typecheck/build and backend tests; live Telegram and social publishing require the user's own credentials and are not claimed as tested.
+
 ## Revision 2 checks
 
-`npm test` now runs `core.test.ts` and `revision.test.ts`. Current suite: 36 checks covering the original flows plus timezone/DST scheduling, exact due boundaries, interval phase, downtime coalescing, occurrence deduplication, CRUD/overlap, bounded retry, deliberate-pause protection, provider overrides, reports/archive/follow-up, directional empty-space combat/cooldown/occlusion, multi-hit HP, healing, persistent bodies/resurrection/replacement, seven machine methods, stop/release/restart persistence, additive legacy-save migration and authoritative NPC interaction acknowledgments.
+`npm test` now runs `core.test.ts`, `revision.test.ts` and `social.test.ts`. Current suite: 44 checks covering the original flows plus timezone/DST scheduling, exact due boundaries, interval phase, downtime coalescing, occurrence deduplication, CRUD/overlap, bounded retry, deliberate-pause protection, provider overrides, reports/archive/follow-up, directional empty-space combat/cooldown/occlusion, multi-hit HP, healing, persistent bodies/resurrection/replacement, seven machine methods, stop/release/restart persistence, additive legacy-save migration and authoritative NPC interaction acknowledgments.
 
 `revision.spec.ts` adds browser flows that deliberately delay combat HTTP responses to verify feedback is immediate, hold SPACE to verify bounded autofire, inspect actual world HP bars/blood counters/body sprites, reload a corpse, exercise healing/resurrection/similar/new replacement, run a real server-scheduled fixture task while the page is `about:blank`, review its report, and test persistent machine control. A separate HTTP test verifies Vite refuses vault/SQLite files. Test servers explicitly disable Supabase replication so fixtures cannot alter a configured real project.
 

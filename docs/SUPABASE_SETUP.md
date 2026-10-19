@@ -38,12 +38,14 @@ Run these files in order:
 
 1. [`supabase/migrations/20261006042020_office_game.sql`](../supabase/migrations/20261006042020_office_game.sql)
 2. [`supabase/migrations/20261006213943_scheduler_combat_and_torture.sql`](../supabase/migrations/20261006213943_scheduler_combat_and_torture.sql)
+3. [`supabase/migrations/20261015000000_multi_office.sql`](../supabase/migrations/20261015000000_multi_office.sql)
+4. [`supabase/migrations/20261019000000_social_media_telegram.sql`](../supabase/migrations/20261019000000_social_media_telegram.sql)
 
-**Existing installation:** apply only the second file if the original migration is already installed. It is additive; it does not delete employees, tasks, reports, connections or history.
+**Existing installation:** apply only the newer additive files. They do not delete employees, tasks, reports, connections or history.
 
-No schema invention is required. The migration is transactional and creates:
+No schema invention is required. The migrations are transactional and create:
 
-`companies`, `employees`, `employee_appearance`, `employee_provider_config`, `employment_history`, `tasks`, `task_events`, `conversations`, `messages`, `reports`, `meetings`, `meeting_participants`, `meeting_messages`, `provider_connections`, `game_settings`, `company_settings`, `office_state`, `player_state`, `inventory`, `incidents`.
+`companies`, `employees`, `employee_appearance`, `employee_provider_config`, `employment_history`, `tasks`, `task_events`, `conversations`, `messages`, `reports`, `meetings`, `meeting_participants`, `meeting_messages`, `provider_connections`, `game_settings`, `company_settings`, `office_state`, `player_state`, `inventory`, `incidents`, `recurring_tasks`, `scheduled_task_runs`, `torture_sessions`, `office_branding`, `social_accounts`, `social_posts`, `social_campaigns`, `social_publishes`.
 
 Each record has UUID primary key, `created_at`, `updated_at`, JSONB payload and indexed company relationship. Generated typed columns support employment status, task state, employee/conversation/meeting relationships. Status constraints reject invalid states. Provider metadata explicitly rejects raw credential fields.
 

@@ -27,6 +27,7 @@ export const furniture: Furniture[] = [
   { id: 'jukebox', kind: 'jukebox', x: 248, y: 616, w: 32, h: 40, action: 'audio', label: 'Lounge radio', point: { x: 264, y: 680 } },
   { id: 'creative-desk', kind: 'desk', x: 368, y: 520, w: 96, h: 40 }, { id: 'qa-desk', kind: 'desk', x: 496, y: 648, w: 96, h: 40 },
   { id: 'ops-desk', kind: 'desk', x: 680, y: 520, w: 160, h: 40 },
+  { id: 'social-desk', kind: 'desk', x: 856, y: 552, w: 64, h: 32, action: 'social', label: 'Social media studio', point: { x: 888, y: 608 } },
   { id: 'whiteboard', kind: 'board', x: 712, y: 664, w: 136, h: 20, action: 'board', label: 'Company whiteboard', point: { x: 776, y: 712 } },
   { id: 'boss', kind: 'desk', x: 1040, y: 528, w: 144, h: 48, action: 'computer', label: 'Director’s laptop', point: { x: 1112, y: 600 } },
   { id: 'mirror', kind: 'mirror', x: 1200, y: 480, w: 24, h: 24, action: 'character', label: 'Wardrobe & mirror', point: { x: 1208, y: 536 } },
@@ -54,6 +55,7 @@ export const workstations: Record<Department, Point[]> = {
   Creative: [{ x: 408, y: 584 }, { x: 456, y: 584 }, { x: 360, y: 616 }, { x: 456, y: 616 }],
   QA: [{ x: 536, y: 712 }, { x: 584, y: 712 }, { x: 488, y: 744 }, { x: 584, y: 744 }],
   Operations: [{ x: 712, y: 592 }, { x: 776, y: 592 }, { x: 840, y: 592 }, { x: 888, y: 624 }],
+  'Social Media': [{ x: 888, y: 632 }, { x: 864, y: 648 }, { x: 904, y: 680 }, { x: 872, y: 712 }],
 };
 export const meetingSpots: Point[] = [{ x: 680, y: 184 }, { x: 680, y: 248 }, { x: 728, y: 280 }, { x: 792, y: 280 }, { x: 872, y: 248 }, { x: 872, y: 184 }];
 export const distance = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);

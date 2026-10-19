@@ -1,5 +1,6 @@
 import type { Director, GameSave, Office, OfficeSummary, Point, WorldState } from '../../../packages/shared/src/types';
 import { terminalTasks } from '../../../packages/shared/src/types';
+import { integrationStatus } from './integrations';
 
 /**
  * Accessor view over the persisted save. The engine and scheduler keep using `state.employees`,
@@ -32,6 +33,14 @@ export class GameState {
   get tortureSessions() { return this.active.tortureSessions; }
   get history() { return this.active.history; }
   get incidents() { return this.active.incidents; }
+  get socialAccounts() { return this.active.socialAccounts; }
+  get socialPosts() { return this.active.socialPosts; }
+  get socialCampaigns() { return this.active.socialCampaigns; }
+  get socialPublishes() { return this.active.socialPublishes; }
+  get socialLastSyncAt() { return this.active.socialLastSyncAt; }
+  set socialLastSyncAt(value: string | undefined) { this.active.socialLastSyncAt = value; }
+  get socialAnalyticsError() { return this.active.socialAnalyticsError; }
+  set socialAnalyticsError(value: string | undefined) { this.active.socialAnalyticsError = value; }
   get savedAt() { return this.save.savedAt; }
   set savedAt(value: string) { this.save.savedAt = value; }
   get storage() { return this.save.storage; }
@@ -57,7 +66,9 @@ export function view(state: GameState): WorldState {
     employees: o.employees, tasks: o.tasks, providers: state.save.providers, conversations: o.conversations, messages: o.messages,
     reports: o.reports, meetings: o.meetings, recurringTasks: o.recurringTasks, scheduleRuns: o.scheduleRuns, tortureSessions: o.tortureSessions,
     history: o.history, incidents: o.incidents,
-    events: state.save.events, settings: state.save.settings,
+    socialAccounts: o.socialAccounts, socialPosts: o.socialPosts, socialCampaigns: o.socialCampaigns, socialPublishes: o.socialPublishes,
+    socialLastSyncAt: o.socialLastSyncAt, socialAnalyticsError: o.socialAnalyticsError,
+    events: state.save.events, settings: state.save.settings, integrations: integrationStatus(state.save.settings),
     player: { ...state.save.director, x: o.playerPosition.x, y: o.playerPosition.y },
     savedAt: state.save.savedAt, storage: state.save.storage,
     activeOfficeId: state.save.activeOfficeId, offices: state.save.offices.map(officeSummary),

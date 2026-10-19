@@ -6,7 +6,7 @@ export interface Schedule {
 export interface RecurringTask {
   id: string; name: string; description: string; employeeId: string; providerId: string; model: string;
   instructions: string; expectedOutput: string; projectPath: string; tools: string[]; priority: 'Low' | 'Normal' | 'High';
-  schedule: Schedule; outputDestination: 'printer' | 'laptop' | 'both'; notify: boolean; autoDeliver: boolean;
+  schedule: Schedule; outputDestination: 'printer' | 'laptop' | 'both'; notify: boolean; autoDeliver: boolean; telegramNotify: boolean;
   retryOnFailure: boolean; maxRetries: number; retryDelayMinutes: number;
   enabled: boolean; pausedReason?: string; nextRunAt?: string; lastRunAt?: string;
   createdAt: string; updatedAt: string; deletedAt?: string; copiedFromId?: string;
@@ -16,4 +16,4 @@ export interface ScheduleRun {
   status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'skipped';
   attempt: number; errors: string[]; nextRetryAt?: string; createdAt: string; completedAt?: string;
 }
-export interface ScheduledTaskSource { scheduleId: string; runId: string; notify: boolean; autoDeliver: boolean; outputDestination: 'printer' | 'laptop' | 'both' }
+export interface ScheduledTaskSource { scheduleId: string; runId: string; notify: boolean; autoDeliver: boolean; telegramNotify: boolean; outputDestination: 'printer' | 'laptop' | 'both' }

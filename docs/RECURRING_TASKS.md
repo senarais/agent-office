@@ -9,7 +9,7 @@
 3. Choose **New recurring task**.
 4. Enter name, employee and actual task instructions.
 5. Select schedule, timezone, provider/model and optional OpenCode tools/project path.
-6. Choose **printer / laptop / both**, whether to notify, whether the employee should physically deliver a report, and optional failure retry.
+6. Choose **printer / laptop / both**, whether to notify, whether the employee should physically deliver a report, whether this schedule's report goes to **Telegram**, and optional failure retry.
 7. Save. The next execution time appears in the selected timezone.
 
 Example:
@@ -67,6 +67,8 @@ The browser may be closed. **The local server, computer and provider/runtime mus
 - **Tasks app:** cancel or pause an already-running request. Pausing a schedule alone does not abort it.
 
 Reports support reading, approval, revision, archiving and creating a follow-up task. Printer-only/laptop-only routing controls printer appearance and the physical output tray; the boss's company report archive retains all results.
+
+**Telegram:** each schedule has its own **Send report to Telegram** toggle. The global default for manual reports is in **Esc → Gameplay**. Delivery state is stored on the report. Configure `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` in the backend `.env`, then restart. See [SOCIAL_MEDIA.md](SOCIAL_MEDIA.md) for bot setup and commands. Telegram reports include Approve / Request revision buttons, so recurring output can be handled without opening the office.
 
 ## Retry, availability and replacement rules
 

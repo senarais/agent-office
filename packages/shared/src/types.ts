@@ -1,7 +1,8 @@
 import type { RecurringTask, ScheduleRun, ScheduledTaskSource } from './automation';
+import type { SocialAccount, SocialCampaign, SocialPost, SocialPublish } from './social';
 export type Point = { x: number; y: number };
 export type Rect = Point & { w: number; h: number };
-export const departments = ['Development', 'Research', 'Creative', 'QA', 'Operations'] as const;
+export const departments = ['Development', 'Research', 'Creative', 'QA', 'Operations', 'Social Media'] as const;
 export type Department = typeof departments[number];
 export type Appearance = {
   skin: string; hair: string; hairstyle: 'short' | 'long' | 'spiky' | 'bald';
@@ -32,12 +33,16 @@ export interface Task {
 export interface Usage { inputTokens?: number; outputTokens?: number; totalTokens?: number; cost?: number }
 export interface Message { id: string; conversationId: string; role: 'user' | 'assistant'; text: string; createdAt: string; status: 'complete' | 'streaming' | 'error' | 'cancelled'; error?: string; usage?: Usage }
 export interface Conversation { id: string; employeeId: string; createdAt: string; sessionId?: string }
-export interface Report { id: string; taskId: string; employeeId: string; title: string; text: string; createdAt: string; approved: boolean; delivered: boolean; archived?: boolean; outputDestination?: 'printer' | 'laptop' | 'both' }
+export interface Report {
+  id: string; taskId: string; employeeId: string; title: string; text: string; createdAt: string;
+  approved: boolean; delivered: boolean; archived?: boolean; outputDestination?: 'printer' | 'laptop' | 'both';
+  telegramStatus?: 'sent' | 'failed' | 'not-configured'; telegramSentAt?: string; telegramError?: string;
+}
 export interface Meeting { id: string; topic: string; attendeeIds: string[]; status: 'gathering' | 'running' | 'completed' | 'failed' | 'cancelled'; messages: { employeeId: string; text: string }[]; summary: string; decisions: string[]; actions: { employeeId: string; title: string; taskId?: string }[]; error?: string; createdAt: string }
 export type ProviderKind = 'openai' | 'opencode' | 'commandcode' | 'generic' | 'demo';
 export interface ProviderConfig { id: string; name: string; kind: ProviderKind; baseUrl: string; enabled: boolean; models: string[]; status: 'untested' | 'connected' | 'error'; error?: string; hasSecret: boolean }
 export interface Secret { apiKey?: string; headers?: Record<string, string> }
-export type EventType = 'employee.hired' | 'employee.updated' | 'employee.fired' | 'employee.deceased' | 'employee.arrived' | 'employee.healed' | 'employee.revived' | 'task.created' | 'task.started' | 'task.progress' | 'task.completed' | 'task.failed' | 'task.cancelled' | 'chat.message' | 'chat.completed' | 'meeting.started' | 'meeting.message' | 'meeting.completed' | 'provider.connected' | 'provider.failed' | 'report.delivered' | 'combat.hit' | 'settings.saved' | 'world.changed' | 'schedule.updated' | 'schedule.started' | 'schedule.finished' | 'torture.started' | 'torture.stopped' | 'office.created' | 'office.switched';
+export type EventType = 'employee.hired' | 'employee.updated' | 'employee.fired' | 'employee.deceased' | 'employee.arrived' | 'employee.healed' | 'employee.revived' | 'task.created' | 'task.started' | 'task.progress' | 'task.completed' | 'task.failed' | 'task.cancelled' | 'chat.message' | 'chat.completed' | 'meeting.started' | 'meeting.message' | 'meeting.completed' | 'provider.connected' | 'provider.failed' | 'report.delivered' | 'report.telegram' | 'combat.hit' | 'settings.saved' | 'world.changed' | 'schedule.updated' | 'schedule.started' | 'schedule.finished' | 'torture.started' | 'torture.stopped' | 'office.created' | 'office.switched' | 'social.campaign' | 'social.review' | 'social.published' | 'social.failed' | 'social.analytics' | 'integration.updated';
 export interface OfficeEvent { id: string; type: EventType; text: string; entityId?: string; createdAt: string; notify?: boolean }
 export interface Settings {
   master: number; music: number; sfx: number; ambient: number; dialogue: number; muted: boolean;
@@ -47,8 +52,9 @@ export interface Settings {
   pixelScale: number; windowScale: number; cameraSmoothness: number; shake: boolean; crt: boolean; scanlines: boolean; glow: boolean; weather: boolean; reducedMotion: boolean; damageFlash: boolean; highContrast: boolean;
   violence: 'full' | 'slapstick' | 'disabled'; keys: { up: string; down: string; left: string; right: string; interact: string; action: string };
   blood: boolean; weaponDamage: Record<Weapon, number>;
+  telegramReports: boolean;
 }
-export const defaultSettings: Settings = { master: .6, music: .3, sfx: .45, ambient: .15, dialogue: .2, muted: false, musicOn: true, sfxOn: true, ambientOn: false, track: 0, shuffle: false, repeat: true, time: 'local', playerSpeed: 'fast', npcSpeed: 'fast', textSpeed: 'fast', animationSpeed: 'fast', pixelScale: 2, windowScale: 1, cameraSmoothness: .12, shake: true, crt: false, scanlines: false, glow: true, weather: false, reducedMotion: false, damageFlash: true, highContrast: false, violence: 'full', blood: true, weaponDamage: { hand: 6, whip: 10, knife: 18, rifle: 25 }, keys: { up: 'w', down: 's', left: 'a', right: 'd', interact: 'e', action: ' ' } };
+export const defaultSettings: Settings = { master: .6, music: .3, sfx: .45, ambient: .15, dialogue: .2, muted: false, musicOn: true, sfxOn: true, ambientOn: false, track: 0, shuffle: false, repeat: true, time: 'local', playerSpeed: 'fast', npcSpeed: 'fast', textSpeed: 'fast', animationSpeed: 'fast', pixelScale: 2, windowScale: 1, cameraSmoothness: .12, shake: true, crt: false, scanlines: false, glow: true, weather: false, reducedMotion: false, damageFlash: true, highContrast: false, violence: 'full', blood: true, weaponDamage: { hand: 6, whip: 10, knife: 18, rifle: 25 }, telegramReports: false, keys: { up: 'w', down: 's', left: 'a', right: 'd', interact: 'e', action: ' ' } };
 export type Weapon = 'hand' | 'whip' | 'knife' | 'rifle';
 export type PunishmentMethod = 'whip' | 'punch' | 'knife' | 'target' | 'shock' | 'meeting' | 'paperwork';
 export interface TortureSession { id: string; employeeId: string; method: PunishmentMethod; intensity: number; status: 'walking' | 'active' | 'paused' | 'released' | 'deceased'; nextPulseAt: number; pulses: number; damageDealt: number; createdAt: string; endedAt?: string }
@@ -59,12 +65,18 @@ export interface Incident { id: string; employeeId: string; weapon: Weapon; text
 export interface Director { appearance: Appearance; equipped: Weapon; coffee: number; energyDrinks: number; food: number; drinks: number; inventory: string[]; caffeinatedUntil?: number }
 /** PT legal identity plus per-business branding (motto, wall color, plants, goals, chaos). */
 export interface OfficeBranding { id: string; name: string; motto: string; chaos: number; wallColor: string; plants: boolean; goals: string }
+export interface IntegrationStatus {
+  telegram: { configured: boolean; chats: number; reportsDefault: boolean };
+  social: { publisher: boolean; analytics: boolean; media: boolean; imageGeneration: boolean };
+}
 /** One business office: its own people, work, records and director position. Shared providers/settings live at the PT root. */
 export interface Office {
   id: string; name: string; industry: string; createdAt: string; company: OfficeBranding;
   employees: Employee[]; tasks: Task[]; conversations: Conversation[]; messages: Message[];
   reports: Report[]; meetings: Meeting[]; recurringTasks: RecurringTask[]; scheduleRuns: ScheduleRun[];
   tortureSessions: TortureSession[]; history: EmploymentRecord[]; incidents: Incident[];
+  socialAccounts: SocialAccount[]; socialPosts: SocialPost[]; socialCampaigns: SocialCampaign[]; socialPublishes: SocialPublish[];
+  socialLastSyncAt?: string; socialAnalyticsError?: string;
   playerPosition: Point;
 }
 export interface OfficeSummary { id: string; name: string; industry: string; employees: number; activeTasks: number }
@@ -81,7 +93,10 @@ export interface WorldState {
   employees: Employee[]; tasks: Task[]; providers: ProviderConfig[]; conversations: Conversation[]; messages: Message[]; reports: Report[]; meetings: Meeting[];
   recurringTasks: RecurringTask[]; scheduleRuns: ScheduleRun[]; tortureSessions: TortureSession[];
   history: EmploymentRecord[]; incidents: Incident[];
+  socialAccounts: SocialAccount[]; socialPosts: SocialPost[]; socialCampaigns: SocialCampaign[]; socialPublishes: SocialPublish[];
+  socialLastSyncAt?: string; socialAnalyticsError?: string;
   events: OfficeEvent[]; settings: Settings; player: Director & Point;
+  integrations: IntegrationStatus;
   savedAt: string; storage: { mode: 'local' | 'supabase'; error?: string; syncedAt?: string; restoreBlocked?: boolean };
   activeOfficeId: string; offices: OfficeSummary[];
 }

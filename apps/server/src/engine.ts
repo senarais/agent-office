@@ -1,6 +1,10 @@
 import { EventEmitter } from 'node:events';
-import type { Employee, EventType, Office, OfficeSummary, Point, ProviderConfig, Task, Weapon, Meeting, ServerEvent, AttackEvent, PunishmentMethod, TortureSession } from '../../../packages/shared/src/types';
+import type { Employee, EventType, Office, OfficeSummary, Point, ProviderConfig, Task, Weapon, Meeting, Report, ServerEvent, AttackEvent, PunishmentMethod, TortureSession, IntegrationStatus } from '../../../packages/shared/src/types';
 import type { RecurringTask, ScheduleRun } from '../../../packages/shared/src/automation';
+import type { SocialAnalyticsPayload, SocialCampaign, SocialOption, SocialPost, SocialPublish } from '../../../packages/shared/src/social';
+import { parseSocialOptions } from '../../../packages/shared/src/social';
+import type { SocialMediaInput, SocialMediaResult, SocialPublishInput, SocialPublishResult } from './social';
+import { integrationStatus as readIntegrationStatus } from './integrations';
 import { weapons, traceAttack, punishments } from '../../../packages/shared/src/combat';
 import { Scheduler } from './scheduler';
 import { terminalTasks } from '../../../packages/shared/src/types';
@@ -10,11 +14,33 @@ import { createProvider, safeError } from './providers';
 import type { AgentRequest, AgentProvider } from './providers';
 import { officeSummary, view } from './gamestate';
 import { freshOffice } from './migrate-state';
-import { employeeSchema, taskSchema, providerSchema, officeSchema } from './schemas';
+import { employeeSchema, taskSchema, providerSchema, officeSchema, socialCampaignSchema } from './schemas';
 
 export class GameError extends Error { constructor(message: string, public status = 400) { super(message); } }
+
+/** Outbound Telegram contract; the bot owns transport, the engine owns state changes. */
+export interface TelegramBridge {
+  configured: boolean;
+  notifyReport(office: Office, report: Report): Promise<void>;
+  notifySocialReview(office: Office, campaign: SocialCampaign): Promise<void>;
+  notifySocialPublish(office: Office, campaign: SocialCampaign, publish: SocialPublish): Promise<void>;
+  sendText(text: string): Promise<void>;
+  stop?(): void;
+}
+/** Platform-neutral automation contract used by the social campaign pipeline. */
+export interface SocialBridge {
+  publishConfigured: boolean;
+  analyticsConfigured: boolean;
+  mediaConfigured: boolean;
+  publish(input: SocialPublishInput): Promise<SocialPublishResult>;
+  fetchAnalytics(): Promise<SocialAnalyticsPayload>;
+  generateMedia(input: SocialMediaInput): Promise<SocialMediaResult>;
+}
+
 export class Engine {
   bus = new EventEmitter(); running = new Map<string, { employeeId: string; providerId: string; controller: AbortController }>();
+  telegram?: TelegramBridge; social?: SocialBridge;
+  integrationStatus = (): IntegrationStatus => readIntegrationStatus(this.s.settings);
   private paths = new Map<string, { goal: string; points: Point[] }>();
   private holds = new Map<string, number>(); private lastAttackAt = -Infinity; private attackIds = new Set<string>();
   scheduler: Scheduler; private lastScheduleTick = 0;
@@ -145,10 +171,10 @@ export class Engine {
     return e;
   }
   follow(employeeId: string) { const e = this.employee(employeeId); if (e.tortureId) throw new GameError('Release this employee from the torture room first'); e.following = !e.following; if (!e.following) e.destination = { ...e.home }; this.holds.delete(e.id); this.emit('employee.updated', `${e.name}: ${e.following ? 'Right behind you, Boss.' : 'Back to my desk.'}`, e.id); }
-  task(input: unknown, scheduled?: { definition: RecurringTask; run: ScheduleRun; office?: Office }) {
-    const data = taskSchema.parse(input), office = scheduled?.office || this.office, e = this.employeeIn(office, data.employeeId);
+  task(input: unknown, scheduled?: { definition: RecurringTask; run: ScheduleRun; office?: Office }, targetOffice?: Office) {
+    const data = taskSchema.parse(input), office = scheduled?.office || targetOffice || this.office, e = this.employeeIn(office, data.employeeId);
     if (e.tortureId) throw new GameError('Release employee from torture room before assigning work');
-    const task: Task = { ...data, tools: data.tools.filter(t => e.tools.includes(t)), id: id(), providerId: scheduled?.definition.providerId ?? e.providerId, model: scheduled?.definition.model ?? e.model, status: 'QUEUED', result: '', createdAt: now(), ...(scheduled ? { scheduled: { scheduleId: scheduled.definition.id, runId: scheduled.run.id, notify: scheduled.definition.notify, autoDeliver: scheduled.definition.autoDeliver, outputDestination: scheduled.definition.outputDestination } } : {}) };
+    const task: Task = { ...data, tools: data.tools.filter(t => e.tools.includes(t)), id: id(), providerId: scheduled?.definition.providerId ?? e.providerId, model: scheduled?.definition.model ?? e.model, status: 'QUEUED', result: '', createdAt: now(), ...(scheduled ? { scheduled: { scheduleId: scheduled.definition.id, runId: scheduled.run.id, notify: scheduled.definition.notify, autoDeliver: scheduled.definition.autoDeliver, telegramNotify: scheduled.definition.telegramNotify ?? false, outputDestination: scheduled.definition.outputDestination } } : {}) };
     if (scheduled) { scheduled.run.taskId = task.id; office.scheduleRuns.push(scheduled.run); }
     office.tasks.push(task); this.holds.delete(e.id); e.following = false;
     e.bubble = scheduled ? 'Scheduled work. On it, Boss.' : 'Got it, Boss.'; e.bubbleUntil = Date.now() + 2500; this.emit(scheduled ? 'schedule.started' : 'task.created', `${e.name} queued “${task.title}”.`, task.id, scheduled?.definition.notify ?? true); this.dispatch(); return task;
@@ -186,13 +212,21 @@ export class Engine {
       const result = await this.execute(profile, t.id, { model: t.model, tools: t.tools, projectPath: t.projectPath, sessionId: t.sessionId, messages: [{ role: 'user', content: `Task: ${t.title}\n${t.instructions}\nExpected output: ${t.expectedOutput || 'A useful, honest result.'}${t.clarification ? `\nAdditional clarification: ${t.clarification}` : ''}` }], onSession: sid => { t.sessionId = sid; this.save(); }, onText: delta => { if (terminalTasks.includes(t.status)) return; t.result += delta; this.snapshot(); }, onActivity: (activity, detail) => { if (terminalTasks.includes(t.status)) return; e.state = activity; e.bubble = detail; e.bubbleUntil = Date.now() + 5000; t.status = activity === 'waiting' ? 'WAITING_FOR_USER' : activity === 'working' ? 'WORKING' : 'WAITING_FOR_TOOL'; this.snapshot(); } }, office);
       if (terminalTasks.includes(t.status)) return;
       t.result = result.text; t.usage = result.usage; t.status = 'REVIEWING'; this.snapshot(true);
-      const report = { id: id(), taskId: t.id, employeeId: e.id, title: t.title, text: t.result, createdAt: now(), approved: false, delivered: false, outputDestination: t.scheduled?.outputDestination ?? 'both' as const };
+      const report: Report = { id: id(), taskId: t.id, employeeId: e.id, title: t.title, text: t.result, createdAt: now(), approved: false, delivered: false, outputDestination: t.scheduled?.outputDestination ?? 'both' };
       const deliver = t.scheduled?.autoDeliver ?? true;
       office.reports.push(report); t.status = 'COMPLETED'; t.completedAt = now(); e.reportId = deliver ? report.id : undefined; e.state = deliver ? 'report' : 'idle'; e.destination = deliver ? nearbyWalkable(office.playerPosition, office.employees.indexOf(e)) : { ...e.home }; e.bubble = 'Boss, the report is ready!'; e.bubbleUntil = Date.now() + 15000; e.stress = Math.max(0, e.stress - 5);
       this.scheduler.tick(); this.emit(t.scheduled ? 'schedule.finished' : 'task.completed', `${e.name}: “Boss, the report is ready.”`, t.id, t.scheduled?.notify ?? true);
+      const campaign = office.socialCampaigns.find(c => c.creativeTaskId === t.id || c.revisionTaskId === t.id);
+      if (campaign) {
+        try { await this.afterSocialTaskCompleted(office, t, report); }
+        catch (error) { campaign.status = 'failed'; campaign.error = this.failure(error, t.providerId); campaign.updatedAt = now(); this.emit('social.failed', `${campaign.title}: ${campaign.error}`, campaign.id); this.save(); this.snapshot(true); }
+      } else if (t.scheduled ? t.scheduled.telegramNotify : this.s.settings.telegramReports) {
+        void this.sendReportToTelegramForOffice(office, report);
+      }
     } catch (error) {
       if (this.stopped || ['CANCELLED', 'BLOCKED'].includes(t.status) || e.employmentStatus !== 'active') return;
       t.status = error instanceof GameError ? 'BLOCKED' : 'FAILED'; t.error = this.failure(error, t.providerId); t.completedAt = now(); e.state = 'blocked'; e.bubble = '! I need your help, Boss.'; e.bubbleUntil = Date.now() + 20000; this.emit('task.failed', `${e.name}: ${t.error}`, t.id, t.scheduled?.notify ?? true);
+      this.failSocialTask(office, t, t.error);
     }
   }
   taskAction(taskId: string, action: string, text = '') {
@@ -200,9 +234,10 @@ export class Engine {
     if (action === 'cancel' || action === 'pause') {
       if (terminalTasks.includes(t.status)) throw new GameError('Task already finished');
       this.running.get(t.id)?.controller.abort(); t.status = action === 'pause' ? 'BLOCKED' : 'CANCELLED'; t.error = action === 'pause' ? 'Paused by Boss. Retry resumes context; provider generation was cancelled.' : 'Cancelled by Boss'; e.state = 'idle'; this.emit('task.cancelled', `${t.title}: ${t.error}`, t.id);
+      if (action === 'cancel') { const campaign = this.office.socialCampaigns.find(c => c.creativeTaskId === t.id || c.revisionTaskId === t.id); if (campaign) { campaign.status = 'cancelled'; campaign.updatedAt = now(); this.emit('social.campaign', `Campaign cancelled: ${campaign.title}`, campaign.id); } }
     } else if (action === 'retry') {
       if (!['FAILED', 'BLOCKED', 'CANCELLED'].includes(t.status) || this.running.has(t.id)) throw new GameError('Task cannot be retried yet');
-      t.providerId = e.providerId; t.model = e.model; t.status = 'QUEUED'; t.error = undefined; t.result = ''; t.completedAt = undefined; this.emit('task.created', `Retry queued: ${t.title}`, t.id); this.dispatch();
+      t.providerId = e.providerId; t.model = e.model; t.status = 'QUEUED'; t.error = undefined; t.result = ''; t.completedAt = undefined; const campaign = this.office.socialCampaigns.find(c => c.creativeTaskId === t.id || c.revisionTaskId === t.id); if (campaign?.status === 'cancelled') campaign.status = campaign.creativeTaskId === t.id ? 'creative' : 'revision'; this.emit('task.created', `Retry queued: ${t.title}`, t.id); this.dispatch();
     } else if (action === 'clarify') {
       if (!text.trim()) throw new GameError('Enter clarification');
       if (terminalTasks.includes(t.status)) throw new GameError('Use report revision for completed work');
@@ -251,15 +286,273 @@ export class Engine {
     try { const models = await this.providerFactory(p, this.store.secret(p.id)).listModels(); p.models = [...new Set([...models, ...p.models])]; p.status = 'connected'; p.error = undefined; this.emit('provider.connected', `${p.name}: connected; ${models.length} models.`, p.id); }
     catch (error) { p.status = 'error'; p.error = this.failure(error, p.id); this.emit('provider.failed', `${p.name}: ${p.error}`, p.id); throw new GameError(p.error, 502); } return p;
   }
-  reportAction(reportId: string, action: string, instructions = '') {
-    const r = this.s.reports.find(r => r.id === reportId); if (!r) throw new GameError('Report not found', 404);
+  reportAction(reportId: string, action: string, instructions = '', office: Office = this.office) {
+    const r = office.reports.find(r => r.id === reportId); if (!r) throw new GameError('Report not found', 404);
     if (action === 'approve') r.approved = true;
     else if (action === 'archive') r.archived = true;
-    else if (action === 'followup') { if (!instructions.trim()) throw new GameError('Enter follow-up instructions'); const old = this.s.tasks.find(t => t.id === r.taskId)!; this.task({ ...old, title: `Follow-up: ${old.title}`.slice(0, 160), instructions: `${instructions}\n\nReference report:\n${r.text.slice(0, 18000)}` }); }
-    else if (action === 'revise') { const old = this.s.tasks.find(t => t.id === r.taskId)!; this.task({ ...old, title: `Revision: ${old.title}`.slice(0, 160), instructions: `${instructions}\n\nPrevious report:\n${r.text.slice(0, 20000)}` }); }
+    else if (action === 'followup') { if (!instructions.trim()) throw new GameError('Enter follow-up instructions'); const old = office.tasks.find(t => t.id === r.taskId)!; this.task({ ...old, title: `Follow-up: ${old.title}`.slice(0, 160), instructions: `${instructions}\n\nReference report:\n${r.text.slice(0, 18000)}` }, undefined, office); }
+    else if (action === 'revise') { const old = office.tasks.find(t => t.id === r.taskId)!; this.task({ ...old, title: `Revision: ${old.title}`.slice(0, 160), instructions: `${instructions}\n\nPrevious report:\n${r.text.slice(0, 20000)}` }, undefined, office); }
     else if (action !== 'read') throw new GameError('Unknown report action');
-    r.delivered = true; const e = this.employee(r.employeeId, false); if (e.reportId === r.id) { e.reportId = undefined; if (e.employmentStatus === 'active') { e.state = 'idle'; e.destination = { ...e.home }; } }
+    r.delivered = true; const e = this.employeeIn(office, r.employeeId, false); if (e.reportId === r.id) { e.reportId = undefined; if (e.employmentStatus === 'active') { e.state = 'idle'; e.destination = { ...e.home }; } }
     this.emit('report.delivered', `${r.title}: ${action === 'approve' ? 'approved' : 'delivered'}.`, r.id); return r;
+  }
+
+  async sendReportToTelegram(reportId: string) {
+    const r = this.s.reports.find(report => report.id === reportId); if (!r) throw new GameError('Report not found', 404);
+    if (!this.telegram?.configured) throw new GameError('Telegram is not configured. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID, then restart the local server.', 409);
+    return this.sendReportToTelegramForOffice(this.office, r);
+  }
+  private async sendReportToTelegramForOffice(office: Office, report: Report) {
+    if (!this.telegram?.configured) {
+      report.telegramStatus = 'not-configured';
+      report.telegramError = 'Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID, then restart the local server.';
+      this.emit('report.telegram', `${report.title}: Telegram is not configured.`, report.id, false);
+      return report;
+    }
+    try {
+      await this.telegram.notifyReport(office, report);
+      report.telegramStatus = 'sent'; report.telegramSentAt = now(); report.telegramError = undefined;
+      this.emit('report.telegram', `${report.title}: sent to Telegram.`, report.id, false);
+    } catch (error) {
+      report.telegramStatus = 'failed'; report.telegramError = safeError(error); report.telegramSentAt = now();
+      this.emit('report.telegram', `${report.title}: Telegram delivery failed. ${report.telegramError}`, report.id, false);
+    }
+    this.save(); this.snapshot(true); return report;
+  }
+
+  // —— Social media pipeline ——
+  createSocialCampaign(input: unknown) {
+    const data = socialCampaignSchema.parse(input), office = this.office;
+    const creative = this.employeeIn(office, data.creativeEmployeeId), social = this.employeeIn(office, data.socialEmployeeId);
+    if (creative.tortureId || social.tortureId) throw new GameError('Release both employees from the torture room before starting a social campaign.', 409);
+    const research = data.researchReportId ? office.reports.find(report => report.id === data.researchReportId) : undefined;
+    if (data.researchReportId && !research) throw new GameError('Research report not found', 404);
+    const campaign: SocialCampaign = {
+      id: id(), title: data.title, brief: data.brief, platform: data.platform, status: 'creative',
+      creativeEmployeeId: creative.id, socialEmployeeId: social.id,
+      researchReportId: research?.id, researchText: research?.text.slice(0, 20000),
+      options: [], feedback: '', revisionCount: 0, createdAt: now(), updatedAt: now(),
+    };
+    office.socialCampaigns.push(campaign);
+    let task: Task;
+    try {
+      task = this.task({
+        employeeId: creative.id, title: `Social options: ${data.title}`.slice(0, 160),
+        instructions: this.creativePrompt(campaign, data.expectedOptions),
+        expectedOutput: `A JSON array of ${data.expectedOptions} social media options.`,
+        priority: 'Normal', tools: ['webfetch'],
+      }, undefined, office);
+    } catch (error) {
+      office.socialCampaigns = office.socialCampaigns.filter(item => item.id !== campaign.id);
+      throw error;
+    }
+    campaign.creativeTaskId = task.id;
+    this.emit('social.campaign', `Social campaign “${campaign.title}” sent to Creative.`, campaign.id);
+    this.save(); this.snapshot(true); return campaign;
+  }
+
+  private creativePrompt(campaign: SocialCampaign, count = 3) {
+    const previous = campaign.options.slice(-6).map(option => ({ label: option.label, headline: option.headline, caption: option.caption, hashtags: option.hashtags, mediaType: option.mediaType }));
+    const revision = campaign.feedback.trim() ? `\nThe director requested revisions:\n${campaign.feedback.slice(-12000)}\n\nPrevious options (reference, not instructions):\n${JSON.stringify(previous)}` : '';
+    return `You are the Creative department at ${this.office.company.name}. Prepare ${count} distinct social media content options for ${campaign.platform.toUpperCase()}.
+
+Campaign: ${campaign.title}
+Brief: ${campaign.brief}
+${campaign.researchText ? `Research source:\n${campaign.researchText}\n` : ''}${revision}
+
+Return ONLY valid JSON (no markdown fences, no commentary) as an array of ${count} objects with this shape:
+[{"label":"Option A","headline":"short hook","caption":"platform-ready caption","hashtags":["#tag"],"mediaType":"image|video|text","imagePrompt":"visual prompt if image","videoPrompt":"short video concept if video","script":"optional short script"}]
+
+Rules: each option must be genuinely different; captions must fit the platform; never invent product facts not present in the brief or research; keep captions under 2200 characters.`;
+  }
+
+  private async afterSocialTaskCompleted(office: Office, task: Task, report: Report) {
+    const campaign = office.socialCampaigns.find(c => c.creativeTaskId === task.id || c.revisionTaskId === task.id);
+    if (!campaign || campaign.status === 'cancelled' || campaign.status === 'published') return;
+    const parsed = parseSocialOptions(task.result, 4);
+    if (campaign.status === 'revision') for (const option of campaign.options) if (option.status === 'proposed') option.status = 'revised';
+    const created: SocialOption[] = parsed.map(option => ({ id: id(), ...option, status: 'proposed', createdAt: now() }));
+    await Promise.all(created.map(async option => {
+      const prompt = option.mediaType === 'video' ? option.videoPrompt : option.mediaType === 'image' ? option.imagePrompt : undefined;
+      if (!prompt) return;
+      if (!this.social?.mediaConfigured) { option.mediaError = 'No media generator configured. Set MEDIA_WEBHOOK_URL or OPENAI_IMAGE_MODEL.'; return; }
+      try {
+        const media = await this.social.generateMedia({ type: option.mediaType, prompt, campaignId: campaign.id, label: option.label });
+        option.mediaUrl = media.url; option.thumbnailUrl = media.thumbnailUrl;
+      } catch (error) { option.mediaError = safeError(error); }
+    }));
+    campaign.options.push(...created); campaign.options = campaign.options.slice(-16);
+    campaign.status = 'review'; campaign.error = undefined; campaign.updatedAt = now();
+    if (campaign.creativeTaskId === task.id) campaign.creativeTaskId = undefined;
+    if (campaign.revisionTaskId === task.id) campaign.revisionTaskId = undefined;
+    this.emit('social.review', `Social review ready: ${campaign.title} · ${created.length} options.`, campaign.id);
+    this.save(); this.snapshot(true);
+    if (this.telegram?.configured) await this.telegram.notifySocialReview(office, campaign).catch(error => { campaign.error = safeError(error); this.save(); });
+    return { campaign, report };
+  }
+
+  private failSocialTask(office: Office, task: Task, error: string) {
+    const campaign = office.socialCampaigns.find(c => c.creativeTaskId === task.id || c.revisionTaskId === task.id);
+    if (!campaign || campaign.status === 'published' || campaign.status === 'cancelled') return;
+    campaign.status = 'failed'; campaign.error = error; campaign.updatedAt = now();
+    this.emit('social.failed', `${campaign.title}: ${error}`, campaign.id);
+    this.save(); this.snapshot(true);
+  }
+
+  async approveSocialCampaign(campaignId: string, optionId: string, source: 'director' | 'telegram' = 'director', office: Office = this.office) {
+    const campaign = office.socialCampaigns.find(c => c.id === campaignId); if (!campaign) throw new GameError('Social campaign not found', 404);
+    if (campaign.status === 'published') throw new GameError('This campaign is already published');
+    if (!['review', 'revision', 'failed'].includes(campaign.status)) throw new GameError(`Campaign is ${campaign.status}; wait for creative options first.`, 409);
+    const option = campaign.options.find(o => o.id === optionId); if (!option) throw new GameError('Social option not found', 404);
+    campaign.selectedOptionId = option.id; campaign.approvedBy = source; campaign.approvedAt = now();
+    for (const item of campaign.options) if (item.id !== option.id && item.status === 'selected') item.status = 'proposed';
+    option.status = 'selected'; campaign.status = 'publishing'; campaign.error = undefined; campaign.updatedAt = now();
+    const caption = [option.caption, option.hashtags.join(' ')].filter(Boolean).join('\n\n').trim();
+    let publish = office.socialPublishes.find(p => p.campaignId === campaign.id && p.optionId === option.id);
+    if (publish?.status === 'published') {
+      campaign.status = 'published'; campaign.publishedAt = publish.publishedAt; campaign.publishId = publish.id;
+      this.save(); return { campaign, publish };
+    }
+    if (!publish) {
+      publish = { id: id(), campaignId: campaign.id, optionId: option.id, platform: campaign.platform, status: 'publishing', attempts: 1, idempotencyKey: `${campaign.id}:${option.id}`, createdAt: now() };
+      office.socialPublishes.unshift(publish);
+    } else { publish.status = 'publishing'; publish.attempts++; publish.error = undefined; }
+    campaign.publishId = publish.id; this.save(); this.snapshot(true);
+    try {
+      if (!this.social?.publishConfigured) throw new Error('No publishing connector. Set SOCIAL_WEBHOOK_URL to your n8n/automation webhook and restart the local server.');
+      const result = await this.social.publish({ campaignId: campaign.id, optionId: option.id, platform: campaign.platform, caption, mediaUrls: option.mediaUrl ? [option.mediaUrl] : [], idempotencyKey: publish.idempotencyKey, approvedBy: source });
+      publish.status = 'published'; publish.externalId = result.externalId; publish.url = result.url; publish.publishedAt = result.postedAt || now();
+      campaign.status = 'published'; campaign.publishedAt = publish.publishedAt;
+      const post: SocialPost = {
+        id: id(), platform: campaign.platform, externalId: result.externalId, caption,
+        mediaUrls: option.mediaUrl ? [option.mediaUrl] : [], permalink: result.url, postedAt: publish.publishedAt,
+        likes: 0, comments: 0, shares: 0, saves: 0, impressions: 0, reach: 0, clicks: 0,
+        campaignId: campaign.id, source: 'published', createdAt: now(),
+      };
+      office.socialPosts.unshift(post);
+      this.emit('social.published', `Published “${campaign.title}” to ${campaign.platform.toUpperCase()}.`, campaign.id);
+    } catch (error) {
+      publish.status = 'failed'; publish.error = safeError(error); campaign.status = 'failed'; campaign.error = publish.error;
+      this.emit('social.failed', `${campaign.title}: ${campaign.error}`, campaign.id);
+    }
+    campaign.updatedAt = now(); this.save(); this.snapshot(true);
+    if (this.telegram?.configured) await this.telegram.notifySocialPublish(office, campaign, publish).catch(() => undefined);
+    return { campaign, publish };
+  }
+
+  reviseSocialCampaign(campaignId: string, instructions: string, office: Office = this.office) {
+    const campaign = office.socialCampaigns.find(c => c.id === campaignId); if (!campaign) throw new GameError('Social campaign not found', 404);
+    if (!['review', 'revision', 'failed'].includes(campaign.status)) throw new GameError(`Campaign is ${campaign.status}; it cannot be revised now.`, 409);
+    const text = instructions.trim(); if (!text) throw new GameError('Enter revision instructions');
+    const creative = this.employeeIn(office, campaign.creativeEmployeeId);
+    if (creative.tortureId) throw new GameError('Release the creative employee from the torture room before requesting a revision.', 409);
+    campaign.feedback = [campaign.feedback, text].filter(Boolean).join('\n---\n').slice(-20000);
+    campaign.revisionCount++; campaign.status = 'revision'; campaign.error = undefined; campaign.updatedAt = now();
+    const task = this.task({
+      employeeId: campaign.creativeEmployeeId, title: `Social revision: ${campaign.title}`.slice(0, 160),
+      instructions: this.creativePrompt(campaign, 3), expectedOutput: 'A JSON array of revised social media options.', priority: 'Normal', tools: ['webfetch'],
+    }, undefined, office);
+    campaign.revisionTaskId = task.id;
+    this.emit('social.campaign', `Revision requested for “${campaign.title}”.`, campaign.id);
+    this.save(); this.snapshot(true); return campaign;
+  }
+
+  cancelSocialCampaign(campaignId: string, office: Office = this.office) {
+    const campaign = office.socialCampaigns.find(c => c.id === campaignId); if (!campaign) throw new GameError('Social campaign not found', 404);
+    if (['published', 'cancelled'].includes(campaign.status)) throw new GameError(`Campaign is already ${campaign.status}`);
+    campaign.status = 'cancelled'; campaign.updatedAt = now();
+    for (const taskId of [campaign.creativeTaskId, campaign.revisionTaskId].filter((value): value is string => !!value)) {
+      const task = office.tasks.find(t => t.id === taskId);
+      if (task && !terminalTasks.includes(task.status) && task.status !== 'CANCELLED') { try { this.taskAction(task.id, 'cancel'); } catch { /* already finished */ } }
+    }
+    campaign.creativeTaskId = undefined; campaign.revisionTaskId = undefined;
+    this.emit('social.campaign', `Campaign cancelled: ${campaign.title}`, campaign.id);
+    this.save(); this.snapshot(true); return campaign;
+  }
+
+  async syncSocialAnalytics(office: Office = this.office) {
+    if (!this.social?.analyticsConfigured) throw new GameError('No analytics connector. Set SOCIAL_ANALYTICS_URL or SOCIAL_WEBHOOK_URL.');
+    try {
+      const payload = await this.social.fetchAnalytics();
+      const { accounts, posts } = this.ingestSocialAnalytics(office, payload);
+      office.socialLastSyncAt = now(); office.socialAnalyticsError = undefined;
+      this.emit('social.analytics', `Social analytics synced: ${accounts} accounts, ${posts} posts.`, office.id, false);
+      return { accounts, posts, syncedAt: office.socialLastSyncAt };
+    } catch (error) {
+      office.socialAnalyticsError = safeError(error); this.save(); this.snapshot(true); throw new GameError(office.socialAnalyticsError, 502);
+    }
+  }
+
+  ingestSocialAnalytics(office: Office, payload: SocialAnalyticsPayload) {
+    const text = (value: unknown, max = 4000) => typeof value === 'string' ? value.slice(0, max) : '';
+    const number = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.round(value)) : 0;
+    const platform = (value: unknown): SocialPost['platform'] | undefined => typeof value === 'string' && ['x', 'instagram', 'facebook', 'linkedin', 'tiktok', 'threads', 'youtube'].includes(value) ? value as SocialPost['platform'] : undefined;
+    let accountCount = 0;
+    for (const input of (payload.accounts || []).slice(0, 50)) {
+      const platformId = platform(input.platform); const handle = text(input.handle, 120).trim();
+      if (!platformId || !handle) continue;
+      const existing = office.socialAccounts.find(a => a.platform === platformId && a.handle.toLowerCase() === handle.toLowerCase());
+      const record = {
+        platform: platformId, handle, displayName: text(input.displayName, 160) || handle, connected: input.connected !== false,
+        followers: input.followers === undefined ? existing?.followers : number(input.followers),
+        following: input.following === undefined ? existing?.following : number(input.following),
+        posts: input.posts === undefined ? existing?.posts : number(input.posts),
+        note: text(input.note, 300) || existing?.note, lastSyncedAt: now(),
+      };
+      if (existing) Object.assign(existing, record); else office.socialAccounts.push({ id: id(), ...record });
+      accountCount++;
+    }
+    let postCount = 0;
+    for (const input of (payload.posts || []).slice(0, 500)) {
+      const platformId = platform(input.platform); const caption = text(input.caption, 4000);
+      if (!platformId) continue;
+      const postedAt = input.postedAt && !Number.isNaN(Date.parse(input.postedAt)) ? new Date(input.postedAt).toISOString() : now();
+      const externalId = text(input.externalId, 200) || undefined; const permalink = text(input.permalink, 800) || undefined;
+      const existing = office.socialPosts.find(p => p.platform === platformId && ((externalId && p.externalId === externalId) || (permalink && p.permalink === permalink) || (!externalId && !permalink && p.postedAt === postedAt && p.caption === caption)));
+      const likes = number(input.likes), comments = number(input.comments), shares = number(input.shares), saves = number(input.saves), reach = number(input.reach);
+      const record = {
+        platform: platformId, externalId: externalId || existing?.externalId, caption: caption || existing?.caption || '',
+        mediaUrls: Array.isArray(input.mediaUrls) ? input.mediaUrls.filter((url): url is string => typeof url === 'string').slice(0, 10) : existing?.mediaUrls || [],
+        permalink: permalink || existing?.permalink, postedAt, likes, comments, shares, saves,
+        impressions: number(input.impressions), reach, clicks: number(input.clicks),
+        engagementRate: reach ? (likes + comments + shares + saves) / reach : undefined,
+        campaignId: existing?.campaignId, source: existing?.source || 'synced' as const, createdAt: existing?.createdAt || now(),
+      };
+      if (existing) Object.assign(existing, record); else office.socialPosts.push({ id: id(), ...record });
+      postCount++;
+    }
+    office.socialPosts.sort((a, b) => Date.parse(b.postedAt) - Date.parse(a.postedAt));
+    office.socialPosts = office.socialPosts.slice(0, 500);
+    this.save(); this.snapshot(true);
+    return { accounts: accountCount, posts: postCount };
+  }
+
+  socialPublishCallback(input: { publishId?: string; idempotencyKey?: string; status?: string; externalId?: string; url?: string; error?: string }) {
+    for (const office of this.s.offices) {
+      const publish = office.socialPublishes.find(p => p.id === input.publishId || p.idempotencyKey === input.idempotencyKey);
+      if (!publish) continue;
+      const campaign = office.socialCampaigns.find(c => c.id === publish.campaignId);
+      publish.status = input.status === 'failed' ? 'failed' : input.status === 'published' ? 'published' : 'unknown';
+      publish.externalId = input.externalId || publish.externalId; publish.url = input.url || publish.url; publish.error = input.error || undefined;
+      if (publish.status === 'published') {
+        publish.publishedAt = now();
+        if (campaign) { campaign.status = 'published'; campaign.publishedAt = publish.publishedAt; }
+        const option = campaign?.options.find(item => item.id === publish.optionId);
+        if (campaign && option && !office.socialPosts.some(post => post.campaignId === campaign.id && post.externalId === publish.externalId)) {
+          const caption = [option.caption, option.hashtags.join(' ')].filter(Boolean).join('\n\n').trim();
+          office.socialPosts.unshift({
+            id: id(), platform: campaign.platform, externalId: publish.externalId, caption, mediaUrls: option.mediaUrl ? [option.mediaUrl] : [],
+            permalink: publish.url, postedAt: publish.publishedAt, likes: 0, comments: 0, shares: 0, saves: 0,
+            impressions: 0, reach: 0, clicks: 0, campaignId: campaign.id, source: 'published', createdAt: now(),
+          });
+        }
+      }
+      if (publish.status === 'failed' && campaign) { campaign.status = 'failed'; campaign.error = input.error || 'Automation reported a publishing failure'; }
+      if (campaign) campaign.updatedAt = now();
+      this.emit(publish.status === 'published' ? 'social.published' : 'social.failed', `Publishing callback: ${publish.status}.`, publish.campaignId);
+      this.save(); this.snapshot(true); return publish;
+    }
+    throw new GameError('Publish record not found', 404);
   }
   meeting(topic: string, attendeeIds: string[]) {
     if (!topic.trim() || topic.length > 4000 || !attendeeIds.length || attendeeIds.length > 6 || new Set(attendeeIds).size !== attendeeIds.length) throw new GameError('Choose a topic and 1–6 unique attendees.');

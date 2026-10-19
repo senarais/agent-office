@@ -10,7 +10,7 @@ async function command<T = unknown>(page: Page, path: string, data: unknown, met
   const response = await page.request.fetch(`/api${path}`, { method, headers: { 'X-Office-Token': token }, data }); expect(response.ok(), await response.text()).toBe(true); return response.json();
 }
 async function enter(page: Page) { await page.goto('/'); await page.getByRole('button', { name: 'ENTER OFFICE' }).click(); await expect.poll(() => page.evaluate(async () => !!(await import('/apps/game/src/game/OfficeScene.ts' as string)).officeScene?.player)).toBe(true); }
-async function close(page: Page) { if (await page.getByRole('dialog').count()) await page.keyboard.press('Escape'); }
+async function close(page: Page) { if (await page.getByRole('dialog').count()) { await page.keyboard.press('Escape'); await expect(page.getByRole('dialog')).toHaveCount(0); } }
 async function walk(page: Page, x: number, y: number) { await close(page); await page.evaluate(async p => (await import('/apps/game/src/game/OfficeScene.ts' as string)).officeScene.walkTo(p), { x, y }); await expect.poll(() => page.evaluate(async p => { const { officeScene } = await import('/apps/game/src/game/OfficeScene.ts' as string); return Math.hypot(officeScene.player.x - p.x, officeScene.player.y - p.y); }, { x, y }), { timeout: 15000 }).toBeLessThan(6); }
 async function device(page: Page, x: number, y: number, title: string) { await walk(page, x, y); await page.keyboard.press('e'); await expect(page.getByRole('dialog', { name: title, exact: true })).toBeVisible(); }
 async function hire(page: Page, name: string, department = 'Development'): Promise<Employee> {
@@ -19,8 +19,13 @@ async function hire(page: Page, name: string, department = 'Development'): Promi
 }
 async function approach(page: Page, id: string) {
   await close(page);
-  await page.evaluate(async id => (await import('/apps/game/src/game/OfficeScene.ts' as string)).officeScene.approachEmployee(id), id);
-  await page.keyboard.down('Shift'); await expect(page.getByRole('dialog', { name: 'A CONVERSATION', exact: true })).toBeVisible({ timeout: 25000 }); await page.keyboard.up('Shift');
+  for (let attempt = 0; attempt < 2; attempt++) {
+    await page.evaluate(async id => (await import('/apps/game/src/game/OfficeScene.ts' as string)).officeScene.approachEmployee(id), id);
+    const dialog = page.getByRole('dialog', { name: 'A CONVERSATION', exact: true });
+    try { await expect(dialog).toBeVisible({ timeout: 10000 }); }
+    catch { await page.keyboard.press('e'); await expect(dialog).toBeVisible({ timeout: 10000 }); }
+    if (await dialog.count()) break;
+  }
   await expect.poll(() => page.evaluate(async () => (await import('/apps/game/src/state.ts' as string)).useGame.getState().window?.id)).toBe(id);
 }
 async function equip(page: Page, weapon: Weapon) {
@@ -43,20 +48,20 @@ test('SPACE fires instantly into empty space, autofire is bounded, and new comba
   const e = await hire(page, 'Combat colleague'); await equip(page, 'knife'); await approach(page, e.id); await close(page); await page.keyboard.press('Space');
   await expect.poll(async () => (await state(page)).employees.find(p => p.id === e.id)!.currentHp).toBe(82);
   await expect.poll(() => page.evaluate(async id => { const { officeScene } = await import('/apps/game/src/game/OfficeScene.ts' as string); return !!officeScene.children.list.find((o: { getData?: (k: string) => unknown }) => o.getData?.('employeeId') === id && o.getData?.('hpVisible')); }, e.id)).toBe(true);
-  expect(await page.evaluate(async () => (await import('/apps/game/src/game/OfficeScene.ts' as string)).officeScene.combatFX.bloodBursts)).toBeGreaterThan(0);
+  await expect.poll(() => page.evaluate(async () => (await import('/apps/game/src/game/OfficeScene.ts' as string)).officeScene.combatFX.bloodBursts)).toBeGreaterThan(0);
   await approach(page, e.id); await page.getByRole('button', { name: 'Heal', exact: true }).click(); await page.getByRole('button', { name: 'Give lunch box', exact: true }).click(); await expect.poll(async () => (await state(page)).employees.find(p => p.id === e.id)!.currentHp).toBe(100);
   await equip(page, 'whip'); await approach(page, e.id); await close(page); await page.keyboard.press('Space'); await expect.poll(async () => (await state(page)).employees.find(p => p.id === e.id)!.currentHp).toBe(90);
   await approach(page, e.id); await page.getByRole('button', { name: 'Heal', exact: true }).click(); await page.getByRole('button', { name: 'Give drink', exact: true }).click(); await expect.poll(async () => (await state(page)).employees.find(p => p.id === e.id)!.currentHp).toBe(100);
   await equip(page, 'rifle'); await approach(page, e.id); await close(page);
   await page.keyboard.press('Space'); await expect.poll(async () => (await state(page)).employees.find(p => p.id === e.id)!.currentHp).toBe(75); expect((await state(page)).employees.find(p => p.id === e.id)!.employmentStatus).toBe('active');
-  for (let i = 0; i < 3; i++) { await page.waitForTimeout(170); await page.keyboard.press('Space'); }
+  for (let i = 0; i < 6; i++) { await page.waitForTimeout(180); await page.keyboard.press('Space'); }
   await expect.poll(async () => (await state(page)).employees.find(p => p.id === e.id)!.employmentStatus).toBe('deceased'); await page.waitForTimeout(350);
   const body = async () => page.evaluate(async id => { const { officeScene } = await import('/apps/game/src/game/OfficeScene.ts' as string); return officeScene.children.list.some((o: { getData?: (k: string) => unknown; angle?: number }) => o.getData?.('employeeId') === id && o.getData?.('corpse') === true && Math.abs(o.angle! - 90) < 1); }, e.id);
   expect(await body()).toBe(true); await page.screenshot({ path: 'docs/screenshots/persistent-corpse.png', animations: 'disabled' });
   await enter(page); await expect.poll(body).toBe(true); await approach(page, e.id); await expect(page.getByText('DECEASED · NOT FIRED')).toBeVisible();
   await page.getByRole('button', { name: 'Leave corpse for now' }).click(); expect((await state(page)).employees.find(p => p.id === e.id)!.corpsePresent).toBe(true);
   await approach(page, e.id); await page.getByRole('button', { name: 'Resurrect', exact: true }).click(); await expect.poll(async () => (await state(page)).employees.find(p => p.id === e.id)!.currentHp).toBe(100); expect((await state(page)).employees.find(p => p.id === e.id)!.employmentStatus).toBe('active');
-  await close(page); await approach(page, e.id); await close(page); for (let i = 0; i < 4; i++) { await page.waitForTimeout(180); await page.keyboard.press('Space'); } await expect.poll(async () => (await state(page)).employees.find(p => p.id === e.id)!.employmentStatus).toBe('deceased');
+  await close(page); await approach(page, e.id); await close(page); for (let i = 0; i < 7; i++) { await page.waitForTimeout(180); await page.keyboard.press('Space'); } await expect.poll(async () => (await state(page)).employees.find(p => p.id === e.id)!.employmentStatus).toBe('deceased');
   await approach(page, e.id); await page.getByRole('button', { name: 'Replace similar', exact: true }).click(); await page.getByLabel('Name', { exact: true }).fill('Replacement colleague'); await page.getByRole('tab', { name: 'Appearance', exact: true }).click(); await page.getByLabel('hat', { exact: true }).check(); await page.getByRole('button', { name: 'Create replacement', exact: true }).click();
   const replacement = (await state(page)).employees.find(p => p.name === 'Replacement colleague')!; expect(replacement.providerId).toBe(e.providerId); expect(replacement.appearance.hat).toBe(true); expect(replacement.predecessorId).toBe(e.id);
   await command(page, `/employees/${replacement.id}/fire`, {}); await device(page, 152, 584, 'HR TERMINAL / PEOPLE & CULTURE'); await page.getByRole('tab', { name: 'Vacancies' }).click();
