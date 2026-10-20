@@ -109,12 +109,15 @@ test('workflow passes research to the social plan, waits for approval, then publ
   assert.equal(f.engine.s.reports.length, 2);
   assert.ok(f.engine.s.reports.every(report => report.workflow?.runId === run!.id));
   assert.equal(research.reportId, undefined, 'auto-approved steps must not walk to the boss with a stale report');
-  assert.deepEqual(reviews.map(review => review.status), ['approved', 'awaiting_approval']);
-  assert.deepEqual(reviews.map(review => review.plan), [0, 2]);
+  assert.deepEqual(reviews.map(review => review.status), ['awaiting_approval']);
+  assert.deepEqual(reviews.map(review => review.plan), [2]);
   f.engine.approveWorkflowStep(run!.id, planStep.id, 'telegram');
   assert.equal(planStep.status, 'approved'); assert.equal(run!.status, 'completed');
   assert.ok(f.engine.s.socialPostPlans.every(item => item.status === 'approved'));
-  assert.deepEqual(finished, ['completed']);
+  await eventually(() => reviews.length === 2);
+  assert.deepEqual(reviews.map(review => review.status), ['awaiting_approval', 'approved']);
+  assert.deepEqual(reviews.map(review => review.plan), [2, 2]);
+  assert.deepEqual(finished, []);
   assert.equal(published.length, 0, 'approval alone must wait for the scheduled time');
   for (const item of f.engine.s.socialPostPlans) item.scheduledAt = new Date(f.time() - 1000).toISOString();
   f.advance(1500); f.engine.tick(.1);

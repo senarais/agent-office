@@ -22,6 +22,13 @@ const chunks = (text: string, size = 3800) => {
   return output;
 };
 const short = (id: string) => id.slice(0, 8);
+const planTime = (iso: string, timeZone: string) => {
+  const date = new Date(iso);
+  const day = new Intl.DateTimeFormat('en-GB', { timeZone, weekday: 'short', day: '2-digit', month: 'short' }).format(date);
+  const time = new Intl.DateTimeFormat('en-GB', { timeZone, hour: '2-digit', minute: '2-digit', hour12: false }).format(date);
+  const label = timeZone === 'Asia/Jakarta' ? 'WIB' : timeZone;
+  return `${day} · ${time} ${label}`;
+};
 
 /**
  * Local-first Telegram bridge. Outbound notifications use the Bot API; inbound updates are
@@ -119,19 +126,41 @@ export class TelegramService {
   }
 
   async notifyWorkflowReview(office: Office, run: WorkflowRun, step: WorkflowStepRun, report: Report, plan: SocialPlanItem[]) {
+    const approval = step.status === 'awaiting_approval';
+    const failed = step.status === 'failed';
+    const revisionAllowed = approval || failed;
+    const timeZone = office.workflows.find(item => item.id === run.workflowId)?.timezone || 'UTC';
+
+    if (plan.length) {
+      const title = approval ? '🗓️ SCHEDULE REVIEW' : failed ? '⚠️ SCHEDULE FAILED' : '✅ SCHEDULED';
+      const body = [
+        `${title} · ${office.name}`,
+        `${run.workflowName} · ${plan.length} posts · ${timeZone}`,
+        ...plan.map((item, position) => `${position + 1}. ${planTime(item.scheduledAt, timeZone)}\n${item.caption}${item.hashtags.length ? `\n${item.hashtags.join(' ')}` : ''}`),
+      ].join('\n\n');
+      const parts = chunks(body);
+      for (let index = 0; index < parts.length; index++) {
+        const keyboard = revisionAllowed && index === parts.length - 1
+          ? { inline_keyboard: [[...(approval ? [{ text: '✅ Approve', callback_data: `ra:${report.id}` }] : []), { text: '✏️ Request revision', callback_data: `rr:${report.id}` }]] }
+          : undefined;
+        for (const chat of telegramChatIds()) await this.api('sendMessage', { chat_id: chat, text: parts[index], disable_web_page_preview: true, ...(keyboard ? { reply_markup: keyboard } : {}) });
+      }
+      return;
+    }
+
+    if (failed) {
+      await this.sendText(`⚠️ WORKFLOW FAILED · ${office.name}\n${run.workflowName} · ${step.name}\n${step.error || 'Unknown workflow error'}`);
+      return;
+    }
+    if (!approval) return;
+
     const employee = office.employees.find(item => item.id === step.employeeId)?.name || 'Employee';
     const index = run.steps.findIndex(item => item.id === step.id) + 1;
-    const approval = step.status === 'awaiting_approval';
-    const revisionAllowed = approval || step.status === 'failed';
-    const header = `🔁 WORKFLOW · ${office.name}\n${run.workflowName} · step ${index}/${run.steps.length}\n${step.name} · ${employee}${approval ? ' · WAITING FOR APPROVAL' : step.status === 'failed' ? ' · FAILED · REVISION NEEDED' : ' · AUTO-COMPLETED'}\n\n`;
-    let body = `${header}${report.text}`;
-    if (plan.length) {
-      body += `\n\nPOSTING SCHEDULE · ${plan.length} posts\n${plan.map((item, position) => `${position + 1}. ${new Date(item.scheduledAt).toLocaleString()} · ${item.platform.toUpperCase()}\n${item.caption}${item.hashtags.length ? `\n${item.hashtags.join(' ')}` : ''}`).join('\n\n')}`;
-    }
+    const body = `🔁 WORKFLOW · ${office.name}\n${run.workflowName} · step ${index}/${run.steps.length}\n${step.name} · ${employee} · WAITING FOR APPROVAL\n\n${report.text}`;
     const parts = chunks(body);
     for (let index = 0; index < parts.length; index++) {
-      const keyboard = revisionAllowed && index === parts.length - 1
-        ? { inline_keyboard: [[...(approval ? [{ text: '✅ Approve', callback_data: `ra:${report.id}` }] : []), { text: '✏️ Request revision', callback_data: `rr:${report.id}` }]] }
+      const keyboard = index === parts.length - 1
+        ? { inline_keyboard: [[{ text: '✅ Approve', callback_data: `ra:${report.id}` }, { text: '✏️ Request revision', callback_data: `rr:${report.id}` }]] }
         : undefined;
       for (const chat of telegramChatIds()) await this.api('sendMessage', { chat_id: chat, text: parts[index], disable_web_page_preview: true, ...(keyboard ? { reply_markup: keyboard } : {}) });
     }

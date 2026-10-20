@@ -232,7 +232,7 @@ export class Engine {
   }
   private async execute(e: Employee, key: string, request: Omit<AgentRequest, 'signal' | 'system'>, office: Office = this.office) {
     this.employeeIn(office, e.id); const provider = this.adapter(e); const controller = new AbortController();
-    this.running.set(key, { employeeId: e.id, providerId: e.providerId, controller }); const timeout = setTimeout(() => controller.abort(new Error('Agent timeout after 5 minutes')), 300000);
+    this.running.set(key, { employeeId: e.id, providerId: e.providerId, controller }); const timeout = setTimeout(() => controller.abort(new Error('Agent timeout after 10 minutes')), 600000);
     try { const result = await provider.execute({ ...request, signal: controller.signal, system: this.context(office, e) }); controller.signal.throwIfAborted(); this.employeeIn(office, e.id); return result; }
     finally { clearTimeout(timeout); if (this.running.get(key)?.controller === controller) this.running.delete(key); }
   }
@@ -577,7 +577,6 @@ export class Engine {
     if (step.kind === 'social-plan') for (const item of office.socialPostPlans) if (item.stepRunId === step.id && item.status === 'proposed') item.status = 'approved';
     this.emit('workflow.step', `${run.workflowName}: “${step.name}” completed automatically.`, run.id);
     this.save(); this.snapshot(true);
-    await this.sendWorkflowReviewToTelegram(office, run, step, report);
     if (run.status === 'running') { this.startWorkflowSteps(office, run); this.maybeFinishWorkflow(office, run); }
   }
 
@@ -587,11 +586,17 @@ export class Engine {
     run.status = 'completed'; run.completedAt = now();
     this.emit('workflow.completed', `Workflow complete: ${run.workflowName}`, run.id);
     this.save(); this.snapshot(true);
-    if (this.telegram?.configured && this.telegram.notifyWorkflowFinished) void this.telegram.notifyWorkflowFinished(office, run).catch(() => undefined);
+    if (this.telegram?.configured) {
+      const planStep = [...run.steps].reverse().find(step => step.kind === 'social-plan' && step.reportId);
+      const planReport = planStep?.reportId ? office.reports.find(report => report.id === planStep.reportId) : undefined;
+      if (planStep && planReport) void this.sendWorkflowReviewToTelegram(office, run, planStep, planReport);
+      else if (this.telegram.notifyWorkflowFinished) void this.telegram.notifyWorkflowFinished(office, run).catch(() => undefined);
+    }
   }
 
   private async sendWorkflowReviewToTelegram(office: Office, run: WorkflowRun, step: WorkflowStepRun, report: Report) {
     const plan = office.socialPostPlans.filter(item => item.stepRunId === step.id && item.status !== 'cancelled');
+    if (!step.requiresApproval && step.status !== 'failed' && step.kind !== 'social-plan') return report;
     if (!this.telegram?.configured) {
       report.telegramStatus = 'not-configured';
       report.telegramError = 'Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID, then restart the local server.';
@@ -700,7 +705,8 @@ export class Engine {
     for (const item of office.socialPostPlans) if (item.runId === run.id && ['proposed', 'approved'].includes(item.status)) item.status = 'cancelled';
     this.emit('workflow.failed', `${run.workflowName}: ${error}`, run.id);
     this.save(); this.snapshot(true);
-    if (this.telegram?.configured && this.telegram.notifyWorkflowFinished) void this.telegram.notifyWorkflowFinished(office, run).catch(() => undefined);
+    const planFailed = run.steps.some(step => step.kind === 'social-plan' && step.status === 'failed');
+    if (this.telegram?.configured && this.telegram.notifyWorkflowFinished && !planFailed) void this.telegram.notifyWorkflowFinished(office, run).catch(() => undefined);
   }
 
   private workflowTaskStopped(office: Office, reference: WorkflowTaskRef, reason: string) {
