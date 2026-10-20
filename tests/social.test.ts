@@ -4,12 +4,13 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Engine } from '../apps/server/src/engine';
+import type { SocialBridge } from '../apps/server/src/engine';
 import { Store } from '../apps/server/src/database';
-import { createApp } from '../apps/server/src/api';
 import { defaultAppearance } from '../packages/shared/src/types';
 import type { Report } from '../packages/shared/src/types';
 import { parseSocialOptions } from '../packages/shared/src/social';
-import type { SocialAnalyticsPayload } from '../packages/shared/src/social';
+import type { SocialAnalyticsPayload, SocialBrowserSettings } from '../packages/shared/src/social';
+import { normalizeBrowserCookies, parseCount, parseInstagramAccount, parseInstagramPost } from '../apps/server/src/social';
 import type { SocialPublishInput } from '../apps/server/src/social';
 
 delete process.env.SUPABASE_URL; delete process.env.SUPABASE_SERVICE_ROLE_KEY; delete process.env.TELEGRAM_BOT_TOKEN; delete process.env.TELEGRAM_CHAT_ID;
@@ -23,6 +24,17 @@ function fixture(t: TestContext) {
 async function eventually(check: () => boolean) { for (let i = 0; i < 400; i++) { if (check()) return; await new Promise(resolve => setTimeout(resolve, 10)); } assert.fail('Timed out waiting for social lifecycle'); }
 function walk(engine: Engine) { for (let i = 0; i < 220; i++) engine.tick(.1); }
 const options = (count = 3) => Array.from({ length: count }, (_, index) => ({ label: `Option ${String.fromCharCode(65 + index)}`, headline: `Hook ${index + 1}`, caption: `Caption ${index + 1}`, hashtags: ['#Abisena'], mediaType: 'image', imagePrompt: `Editorial image ${index + 1}` }));
+const fakeSocial = (overrides: Partial<SocialBridge> = {}): SocialBridge => ({
+  publishConfigured: true, analyticsConfigured: true, mediaConfigured: true,
+  publish: async () => ({ postedAt: new Date().toISOString() }),
+  fetchAnalytics: async (_settings: SocialBrowserSettings) => ({ accounts: [], posts: [] }),
+  generateMedia: async () => ({ url: 'https://cdn.example/generated.png' }),
+  openLogin: async () => ({ started: true, alreadyOpen: false, profile: '/tmp/profile' }),
+  checkSession: async () => ({ loggedIn: true, url: '', profile: '/tmp/profile' }),
+  importCookies: async () => ({ imported: 1, profile: '/tmp/profile' }),
+  browserStatus: () => ({ available: true, headless: true, executable: '/usr/bin/google-chrome', profiles: { x: true, instagram: true, facebook: false }, loginWindows: [] }),
+  ...overrides,
+});
 
 test('creative responses parse from fences, wrappers and plain text fallback', () => {
   const fenced = parseSocialOptions('```json\n[{"label":"A","headline":"Launch","caption":"Hello","hashtags":["#one"],"mediaType":"image","imagePrompt":"photo"}]\n```');
@@ -30,6 +42,11 @@ test('creative responses parse from fences, wrappers and plain text fallback', (
   const wrapped = parseSocialOptions('{"options":[{"label":"B","caption":"Second","mediaType":"video","videoPrompt":"clip"}]}');
   assert.equal(wrapped[0].mediaType, 'video'); assert.equal(wrapped[0].videoPrompt, 'clip');
   assert.equal(parseSocialOptions('No structured response here.')[0].caption, 'No structured response here.');
+  assert.equal(parseCount('1,234'), 1234); assert.equal(parseCount('1.2K Likes'), 1200); assert.equal(parseCount('3M views'), 3000000);
+  assert.equal(parseInstagramAccount('1,234 Followers, 56 Following, 78 Posts', '@office').followers, 1234);
+  assert.deepEqual(parseInstagramPost('12 likes, 3 comments - Office (@office) on Instagram: "Hello"'), { likes: 12, comments: 3, caption: 'Hello' });
+  const cookies = normalizeBrowserCookies([{ name: 'auth_token', value: 'secret', domain: '.x.com', httpOnly: true, secure: true, sameSite: 'no_restriction', expirationDate: 1893456000 }]);
+  assert.equal(cookies.length, 1); assert.equal(cookies[0].sameSite, 'None'); assert.equal(cookies[0].httpOnly, true); assert.equal(cookies[0].expires, 1893456000);
 });
 
 test('creative options become reviewable media, approval publishes, and revisions add options', async t => {
@@ -37,12 +54,10 @@ test('creative options become reviewable media, approval publishes, and revision
   const creative = f.engine.hire({ ...profile, name: 'Cika', role: 'Creative Lead', department: 'Creative', providerId: p.id, model: 'social-test' });
   const social = f.engine.hire({ ...profile, name: 'Sari', role: 'Social Media Manager', department: 'Social Media', providerId: p.id, model: 'social-test' });
   const published: SocialPublishInput[] = []; let generated = 0;
-  f.engine.social = {
-    publishConfigured: true, analyticsConfigured: true, mediaConfigured: true,
+  f.engine.social = fakeSocial({
     publish: async input => { published.push(input); return { externalId: 'post-42', url: 'https://social.example/post-42', postedAt: '2026-10-19T10:00:00Z' }; },
-    fetchAnalytics: async () => ({}),
     generateMedia: async () => { generated++; return { url: `https://cdn.example/media-${generated}.png` }; },
-  };
+  });
   f.engine.providerFactory = () => ({
     listModels: async () => ['social-test'],
     execute: async request => {
@@ -103,18 +118,13 @@ test('analytics ingestion updates engagement without duplicating posts', t => {
   assert.equal(f.engine.s.socialAccounts[0].followers, 1200);
 });
 
-test('signed automation callback accepts analytics without the browser token and rejects a bad secret', async () => {
-  const directory = mkdtempSync(join(tmpdir(), 'pt-social-api-')); const previous = process.env.SOCIAL_WEBHOOK_SECRET;
-  process.env.SOCIAL_WEBHOOK_SECRET = 'social-test-secret';
-  try {
-    const { app } = await createApp(directory, false);
-    const payload = { accounts: [{ platform: 'x', handle: 'office', followers: 10 }], posts: [] };
-    assert.equal((await app.inject({ method: 'POST', url: '/api/social/analytics', payload, headers: { 'x-social-secret': 'wrong' } })).statusCode, 403);
-    const accepted = await app.inject({ method: 'POST', url: '/api/social/analytics', payload, headers: { 'x-social-secret': 'social-test-secret' } });
-    assert.equal(accepted.statusCode, 200); assert.deepEqual(accepted.json(), { accounts: 1, posts: 0 });
-    await app.close();
-  } finally {
-    if (previous) process.env.SOCIAL_WEBHOOK_SECRET = previous; else delete process.env.SOCIAL_WEBHOOK_SECRET;
-    rmSync(directory, { recursive: true, force: true });
-  }
+test('browser settings normalize handles and analytics receives the enabled platforms', async t => {
+  const f = fixture(t); let received: SocialBrowserSettings | undefined;
+  f.engine.social = fakeSocial({ fetchAnalytics: async settings => { received = settings; return { accounts: [], posts: [] }; } });
+  const saved = f.engine.saveSocialSettings({ xEnabled: true, xHandle: '@abisena', instagramEnabled: true, instagramHandle: 'https://instagram.com/office/', facebookEnabled: false, facebookHandle: '' });
+  assert.equal(saved.xHandle, 'abisena'); assert.equal(saved.instagramHandle, 'office');
+  await f.engine.syncSocialAnalytics();
+  assert.deepEqual(received, saved);
+  f.engine.saveSocialSettings({ ...saved, xEnabled: false, instagramEnabled: false });
+  await assert.rejects(() => f.engine.syncSocialAnalytics(), /No social platform enabled/);
 });

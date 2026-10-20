@@ -187,7 +187,7 @@ export class TelegramService {
     ].join('\n'), chatId);
     if (command === '/status') {
       const office = this.engine.office; const status = this.engine.integrationStatus();
-      return this.sendText(`ACTIVE: ${office.name}\nTelegram: ${status.telegram.configured ? 'connected' : 'not configured'}\nPublishing: ${status.social.publisher ? 'configured' : 'not configured'}\nAnalytics: ${status.social.analytics ? 'configured' : 'not configured'}\nMedia: ${status.social.media ? 'configured' : 'not configured'}\nPending reports: ${office.reports.filter(r => !r.delivered && !r.archived).length}\nSocial reviews: ${office.socialCampaigns.filter(c => c.status === 'review').length}`, chatId);
+      return this.sendText(`ACTIVE: ${office.name}\nTelegram: ${status.telegram.configured ? 'connected' : 'not configured'}\nBrowser automation: ${status.social.browser ? `available (${status.social.headless ? 'headless' : 'headed'})` : 'unavailable'}\nX: ${office.socialSettings.xEnabled ? 'enabled' : 'off'} · ${status.social.profiles.x ? 'profile exists' : 'no profile'}\nInstagram: ${office.socialSettings.instagramEnabled ? 'enabled' : 'off'} · ${status.social.profiles.instagram ? 'profile exists' : 'no profile'}\nImages: ${status.social.media ? 'configured' : 'not configured'}\nPending reports: ${office.reports.filter(r => !r.delivered && !r.archived).length}\nSocial reviews: ${office.socialCampaigns.filter(c => c.status === 'review').length}`, chatId);
     }
     if (command === '/pending') {
       const office = this.engine.office;

@@ -8,16 +8,19 @@ import { Store } from './database';
 import { appearanceSchema, parseSettings, weaponSchema, punishmentSchema } from './schemas';
 import { safeError } from './providers';
 import { view } from './gamestate';
-import { SocialService, verifySocialSecret } from './social';
+import { SocialService } from './social';
 import { TelegramService } from './telegram';
 import { canStand } from '../../../packages/shared/src/world';
 import type { ServerEvent } from '../../../packages/shared/src/types';
-import type { SocialAnalyticsPayload } from '../../../packages/shared/src/social';
+import { socialPlatforms } from '../../../packages/shared/src/social';
 
 export async function createApp(directory = process.env.DATA_DIR || '.local-data', ticking = true) {
   const store = new Store(directory); await store.restore(); const engine = new Engine(store); engine.recover();
   const openai = engine.s.providers.find(p => p.kind === 'openai');
-  engine.social = new SocialService({ directory, openaiKey: process.env.OPENAI_API_KEY || (openai ? store.secret(openai.id).apiKey : ''), imageModel: process.env.OPENAI_IMAGE_MODEL || '' });
+  engine.social = new SocialService({
+    directory, openaiKey: process.env.OPENAI_API_KEY || (openai ? store.secret(openai.id).apiKey : ''), imageModel: process.env.OPENAI_IMAGE_MODEL || '',
+    headless: process.env.SOCIAL_BROWSER_HEADLESS !== 'false', executablePath: process.env.SOCIAL_BROWSER_EXECUTABLE || process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE,
+  });
   const telegram = new TelegramService(engine); engine.telegram = telegram; telegram.start();
   const app = Fastify({ logger: false, bodyLimit: 131072 }); const token = randomBytes(32).toString('hex');
   const equal = (candidate: unknown) => typeof candidate === 'string' && candidate.length === token.length && timingSafeEqual(Buffer.from(candidate), Buffer.from(token));
@@ -28,9 +31,7 @@ export async function createApp(directory = process.env.DATA_DIR || '.local-data
     const origin = req.headers.origin;
     if (origin) { let url: URL; try { url = new URL(origin); } catch { throw new GameError('Invalid origin', 403); } if (!['http:', 'https:'].includes(url.protocol) || !['localhost', '127.0.0.1'].includes(url.hostname) || !['5173', '3001', process.env.GAME_PORT || '5173', process.env.PORT || '3001'].includes(url.port)) throw new GameError('Origin rejected', 403); }
     if (req.headers['sec-fetch-site'] === 'cross-site') throw new GameError('Cross-site request rejected', 403);
-    const requestPath = req.url.split('?')[0];
-    const automationCallback = requestPath === '/api/social/analytics' || requestPath === '/api/social/callback';
-    if (!['GET', 'HEAD'].includes(req.method) && !automationCallback && !equal(req.headers['x-office-token'])) throw new GameError('Local session expired. Reload the office.', 403);
+    if (!['GET', 'HEAD'].includes(req.method) && !equal(req.headers['x-office-token'])) throw new GameError('Local session expired. Reload the office.', 403);
     if (req.url === '/api/events' && !equal((req.headers.cookie || '').split(';').map(s => s.trim()).find(s => s.startsWith('office_session='))?.slice(15))) throw new GameError('Start the local game first', 403);
   });
   app.setErrorHandler((error, _req, reply) => { const status = error instanceof GameError ? error.status : error instanceof z.ZodError ? 400 : 500; reply.status(status).send({ error: error instanceof z.ZodError ? error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ') : safeError(error) }); });
@@ -74,15 +75,14 @@ export async function createApp(directory = process.env.DATA_DIR || '.local-data
   app.post<{ Params: { id: string } }>('/api/social/campaigns/:id/revise', req => { const b = z.object({ instructions: z.string().trim().min(1).max(10000) }).parse(req.body); return engine.reviseSocialCampaign(req.params.id, b.instructions); });
   app.post<{ Params: { id: string } }>('/api/social/campaigns/:id/cancel', req => engine.cancelSocialCampaign(req.params.id));
   app.post('/api/social/analytics/sync', () => engine.syncSocialAnalytics());
-  app.post('/api/social/analytics', { bodyLimit: 2 * 1024 * 1024 }, req => {
-    if (!verifySocialSecret(req.headers['x-social-secret'])) throw new GameError('Invalid social webhook secret', 403);
-    const b = z.object({ accounts: z.array(z.any()).optional(), posts: z.array(z.any()).optional() }).parse(req.body);
-    return engine.ingestSocialAnalytics(engine.office, b as SocialAnalyticsPayload);
-  });
-  app.post('/api/social/callback', req => {
-    if (!verifySocialSecret(req.headers['x-social-secret'])) throw new GameError('Invalid social webhook secret', 403);
-    const b = z.object({ publishId: z.string().max(80).optional(), idempotencyKey: z.string().max(200).optional(), status: z.enum(['published', 'failed', 'unknown']), externalId: z.string().max(300).optional(), url: z.string().max(1000).optional(), error: z.string().max(2000).optional() }).parse(req.body);
-    return engine.socialPublishCallback(b);
+  app.put('/api/social/settings', req => engine.saveSocialSettings(req.body));
+  app.get('/api/social/browser/status', () => { if (!engine.social) throw new GameError('Browser automation unavailable', 503); return engine.social.browserStatus(); });
+  app.post('/api/social/browser/login', req => { if (!engine.social) throw new GameError('Browser automation unavailable', 503); return engine.social.openLogin(z.object({ platform: z.enum(socialPlatforms) }).parse(req.body).platform); });
+  app.post('/api/social/browser/check', req => { if (!engine.social) throw new GameError('Browser automation unavailable', 503); return engine.social.checkSession(z.object({ platform: z.enum(socialPlatforms) }).parse(req.body).platform); });
+  app.post('/api/social/browser/cookies', { bodyLimit: 1024 * 1024 }, req => {
+    if (!engine.social) throw new GameError('Browser automation unavailable', 503);
+    const b = z.object({ platform: z.enum(socialPlatforms), cookies: z.array(z.any()).min(1).max(500) }).parse(req.body);
+    return engine.social.importCookies(b.platform, b.cookies);
   });
   app.get<{ Params: { file: string } }>('/api/media/:file', (req, reply) => {
     if (!/^[a-f0-9-]+\.(png|jpe?g|webp|mp4)$/i.test(req.params.file)) throw new GameError('Media not found', 404);

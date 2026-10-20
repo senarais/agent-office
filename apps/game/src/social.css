@@ -38,4 +38,8 @@
 .integration-grid p{font-size:9px}
 .integration-grid small{display:block;margin:7px 0 11px}
 .integration-grid .pixel-button{font-size:8px}
-@media(max-width:760px){.social-options,.integration-grid,.social-accounts{grid-template-columns:1fr}.social-summary{justify-content:flex-start;max-width:none}.social-campaign{padding:14px}.social-campaign>header{flex-wrap:wrap}.social-publish-line{flex-wrap:wrap}.social-metrics{grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}.social-posts header{flex-wrap:wrap}}
+.browser-account{border:2px solid #60764f;background:#203a2a;padding:16px;margin:12px 0}
+.browser-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px}
+.browser-actions small{font-size:8px;color:#a9b69b}
+.browser-actions .pixel-button{font-size:8px;padding:7px 10px;min-height:32px}
+@media(max-width:760px){.social-options,.integration-grid,.social-accounts{grid-template-columns:1fr}.social-summary{justify-content:flex-start;max-width:none}.social-campaign{padding:14px}.social-campaign>header{flex-wrap:wrap}.social-publish-line{flex-wrap:wrap}.social-metrics{grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}.social-posts header{flex-wrap:wrap}.browser-actions{align-items:flex-start}}

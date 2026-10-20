@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { defaultAppearance, defaultSettings } from '../../../packages/shared/src/types';
+import { defaultSocialBrowserSettings } from '../../../packages/shared/src/social';
 import type { Director, GameSave, Office, WorldState } from '../../../packages/shared/src/types';
 import { canStand, entry, nearbyWalkable, spawn } from '../../../packages/shared/src/world';
 
@@ -29,6 +30,7 @@ function fromSingleOffice(old: WorldState): GameSave {
     reports: old.reports || [], meetings: old.meetings || [], recurringTasks: old.recurringTasks || [], scheduleRuns: old.scheduleRuns || [],
     tortureSessions: old.tortureSessions || [], history: old.history || [], incidents: old.incidents || [],
     socialAccounts: [], socialPosts: [], socialCampaigns: [], socialPublishes: [],
+    socialSettings: { ...defaultSocialBrowserSettings },
     playerPosition: { x: old.player?.x ?? spawn.x, y: old.player?.y ?? spawn.y },
   };
   return normalizeSave({ version: 3, company: { id: company.id, name: company.name }, settings, providers: old.providers || [], director, activeOfficeId: office.id, offices: [office], events: old.events || [], savedAt: old.savedAt || new Date().toISOString(), storage: old.storage || { mode: 'local' } });
@@ -53,6 +55,7 @@ function normalizeSave(save: GameSave): GameSave {
     office.employees ??= []; office.tasks ??= []; office.conversations ??= []; office.messages ??= []; office.reports ??= []; office.meetings ??= [];
     office.recurringTasks ??= []; office.scheduleRuns ??= []; office.tortureSessions ??= []; office.history ??= []; office.incidents ??= [];
     office.socialAccounts ??= []; office.socialPosts ??= []; office.socialCampaigns ??= []; office.socialPublishes ??= [];
+    office.socialSettings = { ...defaultSocialBrowserSettings, ...office.socialSettings };
     for (const rule of office.recurringTasks) rule.telegramNotify ??= false;
     office.playerPosition ??= { ...entry };
     if (!canStand(office.playerPosition)) office.playerPosition = { ...entry };
@@ -73,6 +76,7 @@ export function freshOffice(company: { id: string; name: string }, name?: string
     company: { id: company.id, name: company.name, motto: 'Building companies, one agent at a time.', chaos: 0, wallColor: '#597264', plants: true, goals: 'Hire our first colleague. Make something worthwhile.' },
     employees: [], tasks: [], conversations: [], messages: [], reports: [], meetings: [], recurringTasks: [], scheduleRuns: [], tortureSessions: [], history: [], incidents: [],
     socialAccounts: [], socialPosts: [], socialCampaigns: [], socialPublishes: [],
+    socialSettings: { ...defaultSocialBrowserSettings },
     playerPosition: { ...entry },
   };
 }

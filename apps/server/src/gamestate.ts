@@ -67,6 +67,7 @@ export function view(state: GameState): WorldState {
     reports: o.reports, meetings: o.meetings, recurringTasks: o.recurringTasks, scheduleRuns: o.scheduleRuns, tortureSessions: o.tortureSessions,
     history: o.history, incidents: o.incidents,
     socialAccounts: o.socialAccounts, socialPosts: o.socialPosts, socialCampaigns: o.socialCampaigns, socialPublishes: o.socialPublishes,
+    socialSettings: o.socialSettings,
     socialLastSyncAt: o.socialLastSyncAt, socialAnalyticsError: o.socialAnalyticsError,
     events: state.save.events, settings: state.save.settings, integrations: integrationStatus(state.save.settings),
     player: { ...state.save.director, x: o.playerPosition.x, y: o.playerPosition.y },

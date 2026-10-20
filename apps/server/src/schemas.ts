@@ -14,6 +14,11 @@ export const providerSchema = z.object({ id: z.string().uuid().optional(), name:
   if (['generic', 'opencode'].includes(v.kind)) { try { const u = new URL(v.baseUrl); if (!['http:', 'https:'].includes(u.protocol) || u.username || u.password || u.search || u.hash) throw new Error(); } catch { ctx.addIssue({ code: 'custom', message: 'Base URL must be HTTP(S), without credentials, query or fragment', path: ['baseUrl'] }); } }
 });
 export const officeSchema = z.object({ name: z.string().trim().min(1).max(60), industry: z.string().trim().min(1).max(60).default('General') });
+export const socialSettingsSchema = z.object({
+  xEnabled: z.boolean(), xHandle: z.string().trim().max(120),
+  instagramEnabled: z.boolean(), instagramHandle: z.string().trim().max(120),
+  facebookEnabled: z.boolean(), facebookHandle: z.string().trim().max(120),
+});
 export const socialCampaignSchema = z.object({
   title: z.string().trim().min(1).max(140), brief: z.string().trim().min(1).max(20000),
   platform: z.enum(socialPlatforms), creativeEmployeeId: z.string().uuid(), socialEmployeeId: z.string().uuid(),

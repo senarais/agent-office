@@ -26,9 +26,9 @@ Existing saves upgrade automatically — your current office becomes the first b
 
 Completed reports can now be delivered to **Telegram**, including a per-recurring-task toggle and a global default for manual reports. Report messages carry **Approve** and **Request revision** buttons. The bot long-polls locally, so no public webhook is needed.
 
-A sixth division, **Social Media**, runs the full content flow: research → Creative options (caption, image/video prompt, generated media) → your review in the office or Telegram → revision requests → automatic publishing through your own signed automation webhook (n8n or any HTTP endpoint) → synced post analytics (likes, comments, shares, saves, reach, impressions, clicks, engagement). Account credentials stay in your automation workflow, never in the office save.
+A sixth division, **Social Media**, runs the full content flow: research → Creative options (caption, image/video prompt, generated media) → your review in the office or Telegram → revision requests → automatic publishing through a local **Playwright browser worker** → synced post analytics (likes, comments, shares, saves, reach, impressions, clicks, engagement). Account passwords are never stored in the office save; you log in once in a persistent Chromium profile and the worker clicks the real X/Instagram UI.
 
-Open it from **Boss laptop → Social media**, the **Social media studio** desk in the open office, or any report's **Create social campaign** button. Requires `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, and `SOCIAL_WEBHOOK_URL` plus optional analytics/media endpoints. [Full setup and webhook contracts](docs/SOCIAL_MEDIA.md).
+Open it from **Boss laptop → Social media**, the **Social media studio** desk in the open office, or any report's **Create social campaign** button. Requires `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` for remote approvals, plus `npx playwright install chromium` for browser automation. [Full setup](docs/SOCIAL_MEDIA.md).
 
 For an existing Supabase project, apply `supabase/migrations/20261019000000_social_media_telegram.sql` after the earlier migrations.
 
@@ -106,7 +106,7 @@ Typing disables movement. Core keys are remappable in **Esc → Controls**. Touc
 - **Employees:** user-created profiles, modular appearance, HP, six departments (including Social Media), tool permissions, morale/energy/relationship/stress/productivity, idle coffee trips, healing, resurrection, replacements and employment history. Capacity: 20 positions including unresolved deceased staff, four workstations per department.
 - **Tasks:** durable prioritized queues; real workstation arrival before execution; streamed output/tool activity; error details, retry, cancel, pause-as-cancel and saved clarifications; report delivery/revisions/approval.
 - **Recurring tasks:** server-side one-time/daily/weekly/interval/cron, timezone/DST, durable occurrence claims, no overlapping runs, bounded retry, history, pause/resume/edit/delete and selectable report output. Optional Telegram delivery per schedule. Works with browser closed while server remains running.
-- **Social Media:** creative campaign pipeline with structured options, generated media, office/Telegram approvals, revision loops, signed automation publishing and synced post analytics. Credentials remain in your own automation workflow.
+- **Social Media:** creative campaign pipeline with structured options, generated images, office/Telegram approvals, revision loops, local Playwright browser publishing and public-profile analytics. Login sessions stay in persistent browser profiles.
 - **Chat:** persistent conversations, streaming, cancel, retry, new conversations and bounded model context.
 - **Meetings:** 1–6 available employees physically gather; sequential real-agent contributions; stored transcript, model-produced summary/decisions/actions; convert actions to real tasks.
 - **Boss computer:** pixel desktop with company, tasks, employees, reports, finance, analytics, meetings, network and settings. Analytics uses saved task/chat usage only; unknown counts/costs are marked unavailable.

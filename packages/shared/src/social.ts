@@ -56,7 +56,19 @@ export interface SocialAnalyticsPostInput {
   saves?: number; impressions?: number; reach?: number; clicks?: number;
 }
 
-export interface SocialAnalyticsPayload { accounts?: SocialAnalyticsAccountInput[]; posts?: SocialAnalyticsPostInput[] }
+export interface SocialAnalyticsPayload { accounts?: SocialAnalyticsAccountInput[]; posts?: SocialAnalyticsPostInput[]; error?: string }
+
+/** Per-business browser-automation configuration. Credentials stay in the persistent browser profile. */
+export interface SocialBrowserSettings {
+  xEnabled: boolean; xHandle: string;
+  instagramEnabled: boolean; instagramHandle: string;
+  facebookEnabled: boolean; facebookHandle: string;
+}
+export const defaultSocialBrowserSettings: SocialBrowserSettings = {
+  xEnabled: false, xHandle: '',
+  instagramEnabled: false, instagramHandle: '',
+  facebookEnabled: false, facebookHandle: '',
+};
 
 export interface ParsedSocialOption {
   label: string; headline: string; caption: string; hashtags: string[];

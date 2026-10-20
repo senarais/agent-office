@@ -2,9 +2,9 @@
 
 ## Revision 4 checks
 
-`npm test` now also runs `social.test.ts`: tolerant creative-JSON parsing (fences/wrappers/prose fallback), real Creative task execution into reviewable media options, Telegram approval and publishing through a fixture automation connector, revision loops that append options, global and per-schedule Telegram report toggles, analytics deduplication/engagement math, and signed automation callbacks that bypass the browser token only with the shared secret.
+`npm test` now also runs `social.test.ts`: tolerant creative-JSON parsing (fences/wrappers/prose fallback), Instagram count/caption parsing, real Creative task execution into reviewable media options, Telegram approval and publishing through a fixture browser bridge, revision loops that append options, global and per-schedule Telegram report toggles, analytics deduplication/engagement math, and browser account handle normalization.
 
-Browser flows exercise the expanded boss computer (14 apps), the new Social media studio screen reachable from the world, and the existing combat/HR flows. The Social media campaign lint is covered by typecheck/build and backend tests; live Telegram and social publishing require the user's own credentials and are not claimed as tested.
+Browser flows exercise the expanded boss computer (14 apps), the new Social media studio screen reachable from the world, and the existing combat/HR flows. Live Playwright login/posting/analytics against X or Instagram depends on the user's own accounts and is not claimed as automated test success.
 
 ## Revision 2 checks
 

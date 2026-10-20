@@ -7,3 +7,6 @@ playwright-report/
 .env
 .local-data/
 .test-data/
+cookies.json
+*.cookies.json
+*.session.json

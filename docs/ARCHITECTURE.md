@@ -49,7 +49,7 @@ No page router or dashboard navigation. React only owns title/HUD and pixel wind
 | `apps/server/src/engine.ts` | Authoritative employees, movement, task queues, agent orchestration and consequences |
 | `apps/server/src/providers.ts` | Provider-independent execution contract and concrete adapters |
 | `apps/server/src/telegram.ts` | Long-polled Telegram bot, report/review notifications and approval callbacks |
-| `apps/server/src/social.ts` | Signed publishing/analytics/media automation boundary and webhook secret verification |
+| `apps/server/src/social.ts` | Playwright browser worker: persistent login profiles, X/Instagram posting and public-profile analytics |
 | `apps/server/src/integrations.ts` | Secret-free integration status shared with the browser |
 | `apps/server/src/database.ts` | SQLite checkpoints, encrypted vault, Supabase replication/restore |
 
@@ -94,9 +94,11 @@ Meetings gather 1–6 available agents at unique seats. Agents contribute sequen
 
 Telegram is an optional bridge, not a second source of truth. The engine owns all state changes; `telegram.ts` only transports messages and maps authorized chats/callbacks back to `reportAction`, `approveSocialCampaign`, `reviseSocialCampaign` and the scheduler. It long-polls the Bot API, so no inbound webhook is exposed. Only `TELEGRAM_CHAT_ID` may act. Report delivery is recorded on the report; scheduled tasks freeze `telegramNotify` at queue time.
 
-The Social Media division adds a campaign record per content brief. `createSocialCampaign` creates a normal Creative task. On completion, the engine parses the task result into options, optionally generates media through `MEDIA_WEBHOOK_URL` or OpenAI Images, marks the campaign `review`, and notifies Telegram. Approval selects one option and calls `SOCIAL_WEBHOOK_URL` with a stable idempotency key; failures are persisted, never converted into fake success. Revision creates another real Creative task with the previous options and the director's feedback, then appends new options. Analytics are pulled from `SOCIAL_ANALYTICS_URL` or the shared webhook with `action: analytics`, or pushed to a secret-authenticated callback.
+The Social Media division adds a campaign record per content brief. `createSocialCampaign` creates a normal Creative task. On completion, the engine parses the task result into options, optionally generates images through OpenAI Images, marks the campaign `review`, and notifies Telegram. Approval selects one option and invokes the Playwright worker; failures are persisted, never converted into fake success. Revision creates another real Creative task with the previous options and the director's feedback, then appends new options.
 
-Platform credentials remain outside this application. The office only knows platform names, captions, media URLs and public metrics. Signed outgoing calls use `X-Social-Signature` (HMAC-SHA256); inbound automation calls use `x-social-secret` and bypass the browser session token but no other localhost/origin checks.
+`social.ts` owns a persistent Chromium profile per platform under `DATA_DIR/browser/`. A headed login window is exposed from the in-game Connections screen; posting and analytics run headless by default. X uses the composer/Post UI, including media attachment. Instagram uses the Create/upload/Next/Share UI. Analytics scrape the logged-in public profile (latest 12 X posts, latest 6 Instagram posts) and merge by platform plus external id/permalink. UI selectors and human-verification challenges can fail; those failures are reported, never hidden.
+
+Platform passwords/tokens are never stored in the office save. The profile directory contains live cookies and must be treated as a secret. Telegram remains an optional approval/report bridge and is independent of browser publishing.
 
 ## Durable state
 

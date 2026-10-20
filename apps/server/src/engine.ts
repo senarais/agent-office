@@ -1,9 +1,9 @@
 import { EventEmitter } from 'node:events';
 import type { Employee, EventType, Office, OfficeSummary, Point, ProviderConfig, Task, Weapon, Meeting, Report, ServerEvent, AttackEvent, PunishmentMethod, TortureSession, IntegrationStatus } from '../../../packages/shared/src/types';
 import type { RecurringTask, ScheduleRun } from '../../../packages/shared/src/automation';
-import type { SocialAnalyticsPayload, SocialCampaign, SocialOption, SocialPost, SocialPublish } from '../../../packages/shared/src/social';
+import type { SocialAnalyticsPayload, SocialBrowserSettings, SocialCampaign, SocialOption, SocialPlatform, SocialPost, SocialPublish } from '../../../packages/shared/src/social';
 import { parseSocialOptions } from '../../../packages/shared/src/social';
-import type { SocialMediaInput, SocialMediaResult, SocialPublishInput, SocialPublishResult } from './social';
+import type { BrowserCookieInput, SocialMediaInput, SocialMediaResult, SocialPublishInput, SocialPublishResult } from './social';
 import { integrationStatus as readIntegrationStatus } from './integrations';
 import { weapons, traceAttack, punishments } from '../../../packages/shared/src/combat';
 import { Scheduler } from './scheduler';
@@ -14,7 +14,7 @@ import { createProvider, safeError } from './providers';
 import type { AgentRequest, AgentProvider } from './providers';
 import { officeSummary, view } from './gamestate';
 import { freshOffice } from './migrate-state';
-import { employeeSchema, taskSchema, providerSchema, officeSchema, socialCampaignSchema } from './schemas';
+import { employeeSchema, taskSchema, providerSchema, officeSchema, socialCampaignSchema, socialSettingsSchema } from './schemas';
 
 export class GameError extends Error { constructor(message: string, public status = 400) { super(message); } }
 
@@ -27,14 +27,18 @@ export interface TelegramBridge {
   sendText(text: string): Promise<void>;
   stop?(): void;
 }
-/** Platform-neutral automation contract used by the social campaign pipeline. */
+/** Playwright browser-automation contract used by the social campaign pipeline. */
 export interface SocialBridge {
   publishConfigured: boolean;
   analyticsConfigured: boolean;
   mediaConfigured: boolean;
   publish(input: SocialPublishInput): Promise<SocialPublishResult>;
-  fetchAnalytics(): Promise<SocialAnalyticsPayload>;
+  fetchAnalytics(settings: SocialBrowserSettings): Promise<SocialAnalyticsPayload>;
   generateMedia(input: SocialMediaInput): Promise<SocialMediaResult>;
+  openLogin(platform: SocialPlatform): Promise<{ started: boolean; alreadyOpen: boolean; profile: string }>;
+  checkSession(platform: SocialPlatform): Promise<{ loggedIn: boolean; url: string; profile: string }>;
+  importCookies(platform: SocialPlatform, cookies: BrowserCookieInput[]): Promise<{ imported: number; profile: string }>;
+  browserStatus(): { available: boolean; headless: boolean; executable: string | null; profiles: { x: boolean; instagram: boolean; facebook: boolean }; loginWindows: string[] };
 }
 
 export class Engine {
@@ -375,7 +379,7 @@ Rules: each option must be genuinely different; captions must fit the platform; 
     await Promise.all(created.map(async option => {
       const prompt = option.mediaType === 'video' ? option.videoPrompt : option.mediaType === 'image' ? option.imagePrompt : undefined;
       if (!prompt) return;
-      if (!this.social?.mediaConfigured) { option.mediaError = 'No media generator configured. Set MEDIA_WEBHOOK_URL or OPENAI_IMAGE_MODEL.'; return; }
+      if (!this.social?.mediaConfigured) { option.mediaError = 'No image generator configured. Set OPENAI_IMAGE_MODEL and OPENAI_API_KEY in the office .env.'; return; }
       try {
         const media = await this.social.generateMedia({ type: option.mediaType, prompt, campaignId: campaign.id, label: option.label });
         option.mediaUrl = media.url; option.thumbnailUrl = media.thumbnailUrl;
@@ -419,8 +423,9 @@ Rules: each option must be genuinely different; captions must fit the platform; 
     } else { publish.status = 'publishing'; publish.attempts++; publish.error = undefined; }
     campaign.publishId = publish.id; this.save(); this.snapshot(true);
     try {
-      if (!this.social?.publishConfigured) throw new Error('No publishing connector. Set SOCIAL_WEBHOOK_URL to your n8n/automation webhook and restart the local server.');
-      const result = await this.social.publish({ campaignId: campaign.id, optionId: option.id, platform: campaign.platform, caption, mediaUrls: option.mediaUrl ? [option.mediaUrl] : [], idempotencyKey: publish.idempotencyKey, approvedBy: source });
+      if (!this.social?.publishConfigured) throw new Error('Playwright browser automation is unavailable. Run `npx playwright install chromium` on the local server.');
+      const handle = campaign.platform === 'x' ? office.socialSettings.xHandle : campaign.platform === 'instagram' ? office.socialSettings.instagramHandle : office.socialSettings.facebookHandle;
+      const result = await this.social.publish({ campaignId: campaign.id, optionId: option.id, platform: campaign.platform, caption, mediaUrls: option.mediaUrl ? [option.mediaUrl] : [], idempotencyKey: publish.idempotencyKey, approvedBy: source, handle });
       publish.status = 'published'; publish.externalId = result.externalId; publish.url = result.url; publish.publishedAt = result.postedAt || now();
       campaign.status = 'published'; campaign.publishedAt = publish.publishedAt;
       const post: SocialPost = {
@@ -471,13 +476,14 @@ Rules: each option must be genuinely different; captions must fit the platform; 
   }
 
   async syncSocialAnalytics(office: Office = this.office) {
-    if (!this.social?.analyticsConfigured) throw new GameError('No analytics connector. Set SOCIAL_ANALYTICS_URL or SOCIAL_WEBHOOK_URL.');
+    if (!this.social?.analyticsConfigured) throw new GameError('Playwright browser automation is unavailable. Run `npx playwright install chromium` on the local server.');
+    if (!office.socialSettings.xEnabled && !office.socialSettings.instagramEnabled) throw new GameError('No social platform enabled. Open Social → Connections and enable X or Instagram first.');
     try {
-      const payload = await this.social.fetchAnalytics();
+      const payload = await this.social.fetchAnalytics(office.socialSettings);
       const { accounts, posts } = this.ingestSocialAnalytics(office, payload);
-      office.socialLastSyncAt = now(); office.socialAnalyticsError = undefined;
-      this.emit('social.analytics', `Social analytics synced: ${accounts} accounts, ${posts} posts.`, office.id, false);
-      return { accounts, posts, syncedAt: office.socialLastSyncAt };
+      office.socialLastSyncAt = now(); office.socialAnalyticsError = payload.error;
+      this.emit('social.analytics', `Browser analytics synced: ${accounts} accounts, ${posts} posts.${payload.error ? ` ${payload.error}` : ''}`, office.id, false);
+      return { accounts, posts, syncedAt: office.socialLastSyncAt, error: payload.error };
     } catch (error) {
       office.socialAnalyticsError = safeError(error); this.save(); this.snapshot(true); throw new GameError(office.socialAnalyticsError, 502);
     }
@@ -527,32 +533,12 @@ Rules: each option must be genuinely different; captions must fit the platform; 
     return { accounts: accountCount, posts: postCount };
   }
 
-  socialPublishCallback(input: { publishId?: string; idempotencyKey?: string; status?: string; externalId?: string; url?: string; error?: string }) {
-    for (const office of this.s.offices) {
-      const publish = office.socialPublishes.find(p => p.id === input.publishId || p.idempotencyKey === input.idempotencyKey);
-      if (!publish) continue;
-      const campaign = office.socialCampaigns.find(c => c.id === publish.campaignId);
-      publish.status = input.status === 'failed' ? 'failed' : input.status === 'published' ? 'published' : 'unknown';
-      publish.externalId = input.externalId || publish.externalId; publish.url = input.url || publish.url; publish.error = input.error || undefined;
-      if (publish.status === 'published') {
-        publish.publishedAt = now();
-        if (campaign) { campaign.status = 'published'; campaign.publishedAt = publish.publishedAt; }
-        const option = campaign?.options.find(item => item.id === publish.optionId);
-        if (campaign && option && !office.socialPosts.some(post => post.campaignId === campaign.id && post.externalId === publish.externalId)) {
-          const caption = [option.caption, option.hashtags.join(' ')].filter(Boolean).join('\n\n').trim();
-          office.socialPosts.unshift({
-            id: id(), platform: campaign.platform, externalId: publish.externalId, caption, mediaUrls: option.mediaUrl ? [option.mediaUrl] : [],
-            permalink: publish.url, postedAt: publish.publishedAt, likes: 0, comments: 0, shares: 0, saves: 0,
-            impressions: 0, reach: 0, clicks: 0, campaignId: campaign.id, source: 'published', createdAt: now(),
-          });
-        }
-      }
-      if (publish.status === 'failed' && campaign) { campaign.status = 'failed'; campaign.error = input.error || 'Automation reported a publishing failure'; }
-      if (campaign) campaign.updatedAt = now();
-      this.emit(publish.status === 'published' ? 'social.published' : 'social.failed', `Publishing callback: ${publish.status}.`, publish.campaignId);
-      this.save(); this.snapshot(true); return publish;
-    }
-    throw new GameError('Publish record not found', 404);
+  saveSocialSettings(input: unknown, office: Office = this.office) {
+    const b = socialSettingsSchema.parse(input);
+    const clean = (value: string) => value.replace(/^@/, '').replace(/^https?:\/\/[^/]+\//i, '').replace(/[/?#].*$/, '');
+    office.socialSettings = { ...office.socialSettings, ...b, xHandle: clean(b.xHandle), instagramHandle: clean(b.instagramHandle), facebookHandle: clean(b.facebookHandle) };
+    this.emit('integration.updated', 'Social browser settings saved.', office.id);
+    return office.socialSettings;
   }
   meeting(topic: string, attendeeIds: string[]) {
     if (!topic.trim() || topic.length > 4000 || !attendeeIds.length || attendeeIds.length > 6 || new Set(attendeeIds).size !== attendeeIds.length) throw new GameError('Choose a topic and 1–6 unique attendees.');

@@ -1,5 +1,5 @@
 import type { RecurringTask, ScheduleRun, ScheduledTaskSource } from './automation';
-import type { SocialAccount, SocialCampaign, SocialPost, SocialPublish } from './social';
+import type { SocialAccount, SocialBrowserSettings, SocialCampaign, SocialPost, SocialPublish } from './social';
 export type Point = { x: number; y: number };
 export type Rect = Point & { w: number; h: number };
 export const departments = ['Development', 'Research', 'Creative', 'QA', 'Operations', 'Social Media'] as const;
@@ -67,7 +67,11 @@ export interface Director { appearance: Appearance; equipped: Weapon; coffee: nu
 export interface OfficeBranding { id: string; name: string; motto: string; chaos: number; wallColor: string; plants: boolean; goals: string }
 export interface IntegrationStatus {
   telegram: { configured: boolean; chats: number; reportsDefault: boolean };
-  social: { publisher: boolean; analytics: boolean; media: boolean; imageGeneration: boolean };
+  social: {
+    browser: boolean; headless: boolean;
+    profiles: { x: boolean; instagram: boolean; facebook: boolean };
+    media: boolean; imageGeneration: boolean;
+  };
 }
 /** One business office: its own people, work, records and director position. Shared providers/settings live at the PT root. */
 export interface Office {
@@ -76,6 +80,7 @@ export interface Office {
   reports: Report[]; meetings: Meeting[]; recurringTasks: RecurringTask[]; scheduleRuns: ScheduleRun[];
   tortureSessions: TortureSession[]; history: EmploymentRecord[]; incidents: Incident[];
   socialAccounts: SocialAccount[]; socialPosts: SocialPost[]; socialCampaigns: SocialCampaign[]; socialPublishes: SocialPublish[];
+  socialSettings: SocialBrowserSettings;
   socialLastSyncAt?: string; socialAnalyticsError?: string;
   playerPosition: Point;
 }
@@ -94,6 +99,7 @@ export interface WorldState {
   recurringTasks: RecurringTask[]; scheduleRuns: ScheduleRun[]; tortureSessions: TortureSession[];
   history: EmploymentRecord[]; incidents: Incident[];
   socialAccounts: SocialAccount[]; socialPosts: SocialPost[]; socialCampaigns: SocialCampaign[]; socialPublishes: SocialPublish[];
+  socialSettings: SocialBrowserSettings;
   socialLastSyncAt?: string; socialAnalyticsError?: string;
   events: OfficeEvent[]; settings: Settings; player: Director & Point;
   integrations: IntegrationStatus;

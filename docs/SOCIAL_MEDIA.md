@@ -3,72 +3,130 @@
 Two connected features:
 
 1. Completed reports can be delivered to Telegram, including a per-schedule toggle for recurring reports.
-2. A new **Social Media** division runs a reviewable pipeline: Research → Creative options → your approval → automatic publishing → analytics.
+2. A **Social Media** division runs a reviewable pipeline: Research → Creative options → your approval → local Playwright browser publishing → analytics.
 
-Everything works locally. The office never stores social passwords. Publishing and analytics live in an automation workflow you control (n8n, Make, or any HTTP endpoint).
+No external workflow, webhook bridge or automation service is used. The office drives a real Chromium browser through Playwright.
 
-## What you must configure
+## Requirements
 
-Add these to the backend `.env` (never `VITE_*`), then restart `npm run dev`:
-
-```dotenv
-# Telegram
-TELEGRAM_BOT_TOKEN=123456:bot-token-from-BotFather
-TELEGRAM_CHAT_ID=123456789
-
-# Social publishing automation
-SOCIAL_WEBHOOK_URL=https://your-n8n.example/webhook/abisena-social
-SOCIAL_WEBHOOK_SECRET=choose-a-long-random-string
-
-# Optional: separate analytics endpoint. If omitted, the publish webhook
-# is called again with {"action":"analytics"}.
-SOCIAL_ANALYTICS_URL=
-
-# Optional: image/video generation endpoint.
-MEDIA_WEBHOOK_URL=
-MEDIA_WEBHOOK_SECRET=
-
-# Optional: direct OpenAI image generation fallback (images only).
-OPENAI_IMAGE_MODEL=gpt-image-1
-# OPENAI_API_KEY is already used for the OpenAI agent provider above.
+```bash
+npx playwright install chromium
 ```
 
-`TELEGRAM_CHAT_ID` may contain several comma-separated ids (for example a personal chat and a group). Only those chats may approve or request revisions.
+The server keeps persistent browser profiles under `DATA_DIR/browser/<platform>`. Log in once per account in a headed window; cookies and local storage are reused afterwards.
 
-If `SOCIAL_WEBHOOK_URL` is absent, the pipeline still creates options and accepts approvals, but publishing fails honestly with **No publishing connector**. Nothing is marked as posted without a real result.
+Optional `.env` (backend only):
 
-## Ready-made n8n workflows
+```dotenv
+# false is more reliable for X/Instagram UI automation; true runs without a visible window.
+SOCIAL_BROWSER_HEADLESS=false
 
-This repository includes two importable workflows under [`docs/n8n/`](n8n/):
+# Optional Chrome/Chromium path. Empty uses Playwright's bundled browser.
+SOCIAL_BROWSER_EXECUTABLE=
+SOCIAL_BROWSER_TIMEOUT_MS=60000
 
-- **Abisena Social Publish** → `/webhook/abisena-social` (X, Instagram, Facebook)
-- **Abisena Social Analytics** → `/webhook/abisena-analytics` (X and Instagram metrics)
+# Optional image generation for post media. Uses OPENAI_API_KEY above.
+OPENAI_IMAGE_MODEL=
 
-They use n8n Header Auth with `X-Social-Secret` and a Config node for account IDs. The one-time platform credential steps are in [docs/n8n/README.md](n8n/README.md).
+# Telegram report delivery and remote approvals.
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
+```
 
-## Telegram setup
+Restart `npm run dev` after changing `.env`.
 
-1. Message **@BotFather**, create a bot, copy the token.
-2. Send any message to your new bot.
-3. Open `https://api.telegram.org/bot<TOKEN>/getUpdates` and copy the chat id from the result.
-4. Put both values in `.env`, restart the server.
-5. Open **Boss laptop → Social media → Connections → Send test message**.
+## Connect an account
 
-The bot long-polls Telegram from the local server, so no public URL or tunnel is required. The server must stay running.
+1. Open **Boss laptop → Social media → Connections**.
+2. Enable X and/or Instagram and enter the handle.
+3. Press **Save handles & platform toggles**.
+4. Press **Open login browser**. A Chromium window opens at the platform login page.
+5. Log in manually, complete 2FA/CAPTCHA if asked, then close the window.
+6. Press **Check session** to confirm the persistent profile is authenticated.
+7. Press **Sync analytics** to load the account and recent posts.
 
-### Report delivery
+Only X and Instagram are currently implemented for browser publishing and analytics. Other platforms return an explicit “not implemented” error; the office never fakes a successful post.
 
-- **Per recurring schedule:** edit a recurring task and enable **Send report to Telegram**.
-- **Manual/default:** **Esc → Gameplay → Send completed reports to Telegram**.
-- Any report can also be sent manually from its report window.
-- Report messages include **Approve** and **Request revision** buttons.
-- Delivery state is stored on the report (`sent`, `failed`, or `not configured`).
+### If “Continue with Google” is blocked
 
-### Social review by Telegram
+Google refuses OAuth sign-in in browsers it identifies as automated. The in-game login window is Playwright-controlled, so Google may show “This browser or app may not be secure.”
 
-When Creative finishes, the bot sends every option with a caption and an inline **Approve** button. Approving selects that option and publishes it immediately. **Request revision** asks for your next message, then sends that feedback back to Creative.
+Options:
 
-### Commands
+1. **Simplest:** sign in to X with your username/email and password instead of Google.
+2. **If the account requires Google:** sign in using a normal Google Chrome launch on the same dedicated profile, then let the office reuse it:
+
+```bash
+cd /path/to/senaoffice
+google-chrome \
+  --no-sandbox \
+  --disable-dev-shm-usage \
+  --user-data-dir="$PWD/.local-data/browser/x" \
+  --profile-directory=Default \
+  https://x.com/i/flow/login
+```
+
+`--no-sandbox` is needed on Ubuntu 23.10+ / distributions where AppArmor restricts unprivileged user namespaces. Use it only for this dedicated profile.
+
+Log in with Google in that window, close Chrome, then set:
+
+```dotenv
+SOCIAL_BROWSER_EXECUTABLE=/usr/bin/google-chrome
+SOCIAL_BROWSER_HEADLESS=false
+```
+
+Restart the server and press **Check session**. Make sure no other Chrome window is using that dedicated `user-data-dir` while the office is posting.
+
+### If X temporarily limits login
+
+X may answer repeated automated logins with **“We’ve temporarily limited your login. Please try again later.”** Stop retrying; each attempt can extend the limit.
+
+If you are already logged in to X in your normal browser, reuse that session instead:
+
+1. Install **Cookie-Editor** (or a similar cookie exporter) in the browser where X is logged in.
+2. Open `x.com`, export the cookies as **JSON**, and save them as `cookies.json` in the project directory.
+3. With the office server running:
+   ```bash
+   node scripts/import-social-cookies.mjs x cookies.json
+   ```
+   The script fetches the local session token and imports only the cookie fields into the dedicated Playwright profile.
+4. Delete `cookies.json` immediately.
+5. Office → **Check session**.
+
+The cookie file contains live session credentials. Use only your own account, never commit or share the file, and expect the session to expire eventually. X may still detect browser automation after a valid session is imported.
+
+## Publishing flow
+
+1. Run research normally, or open a report and choose **Create social campaign**.
+2. In **Social media → New campaign**, choose the platform, brief, Creative owner, Social Media owner, optional research report, and expected option count.
+3. Creative returns structured options (headline, caption, hashtags, image/video prompt). If `OPENAI_IMAGE_MODEL` is configured, images are generated. Otherwise X can still publish text; Instagram requires media.
+4. Review in **Pipeline** or Telegram. Approve one option or request a revision with feedback.
+5. On approval the Playwright worker:
+   - **X:** opens the composer, types the caption, attaches media if present, clicks Post, and reads the resulting status URL when available.
+   - **Instagram:** opens Create, uploads the image/video, advances the dialog, fills the caption, clicks Share, and reads the profile’s latest post URL when available.
+6. The real result (`externalId`, URL, timestamp) is stored on the campaign. A rejected post or a UI challenge is recorded as a real failure.
+
+Telegram approval works exactly like the office: report and campaign messages include **Approve** / **Request revision** buttons and `/post`, `/approve`, `/revise` commands. The Telegram bot long-polls locally; no public URL is needed.
+
+## Analytics
+
+Analytics are read from the public profile while using the logged-in browser session:
+
+- **X:** profile header (followers/following) and the latest 12 posts: text, permalink, timestamp, likes, replies, reposts/quotes and visible views.
+- **Instagram:** profile metadata (followers/following/posts) and the latest 6 posts: caption, permalink, timestamp, likes and comments from the post metadata.
+
+Metrics the page does not expose remain empty; they are never estimated. If a platform changes its DOM or shows a human-verification challenge, the sync reports the actual error and keeps the previous data.
+
+## What you must know
+
+- Browser automation is **best-effort UI automation**, not an official platform API. X/Instagram can change selectors, add challenges or rate-limit the account. X captions are truncated to 280 characters; Instagram captions to 2,200.
+- X and Instagram often return `403` to headless browsers. `SOCIAL_BROWSER_HEADLESS=false` is the recommended default and opens a visible Chromium window while working. If headless works for your account/network and you prefer no window, set it to `true`.
+- The browser profile contains live login cookies. Treat `DATA_DIR/browser/` as a secret. Use the office’s own accounts and follow each platform’s terms.
+- `npx playwright install chromium` is required. If Google Chrome is installed, set `SOCIAL_BROWSER_EXECUTABLE=/usr/bin/google-chrome` to use it.
+- The local server must be running for posting, analytics and Telegram approvals.
+- Logging out of the account in the browser profile invalidates automation until you log in again.
+
+## Telegram commands
 
 | Command | Action |
 | --- | --- |
@@ -76,107 +134,8 @@ When Creative finishes, the bot sends every option with a caption and an inline 
 | `/reports` | Recent reports |
 | `/campaigns` | Recent social campaigns |
 | `/approve <report-id>` | Approve a report |
-| `/post <campaign-id> [option-number]` | Approve and publish an option |
+| `/post <campaign-id> [option-number]` | Approve and publish with the browser |
 | `/revise <id> <instructions>` | Revise a report or social campaign |
-| `/status` | Integration and pending counts |
+| `/status` | Browser/profile/Telegram and pending counts |
 
-Ids may be shortened to their first characters. Inline buttons are usually easier.
-
-## Social automation contract
-
-### Publishing
-
-The office POSTs JSON to `SOCIAL_WEBHOOK_URL`:
-
-```json
-{
-  "action": "publish",
-  "platform": "x",
-  "caption": "Caption plus hashtags",
-  "mediaUrls": ["https://cdn.example/post.png"],
-  "campaignId": "…",
-  "optionId": "…",
-  "idempotencyKey": "campaignId:optionId",
-  "approvedBy": "director"
-}
-```
-
-When `SOCIAL_WEBHOOK_SECRET` is set, outgoing calls include:
-
-```text
-X-Social-Signature: sha256=<HMAC-SHA256 of the raw JSON body>
-```
-
-For a self-hosted n8n on `localhost`/`127.0.0.1`, the same secret is also sent as a plain `X-Social-Secret` header so the Webhook node can use **Header Auth** directly. That header is never added for a non-local webhook URL; remote endpoints should verify the HMAC.
-
-Respond with a JSON object:
-
-```json
-{ "externalId": "1899…", "url": "https://x.com/…", "postedAt": "2026-10-19T10:00:00Z" }
-```
-
-If the workflow posts asynchronously, later call:
-
-```bash
-curl -X POST http://127.0.0.1:3001/api/social/callback \
-  -H 'content-type: application/json' \
-  -H 'x-social-secret: YOUR_SECRET' \
-  -d '{"idempotencyKey":"campaignId:optionId","status":"published","url":"https://…"}'
-```
-
-`idempotencyKey` is stable per campaign option, so your workflow can deduplicate retries.
-
-Your workflow must be able to fetch the URLs in `mediaUrls`. A hosted n8n instance needs publicly reachable media URLs (return those from `MEDIA_WEBHOOK_URL`). Local n8n can fetch `http://127.0.0.1:3001/api/media/…` while the office server is running.
-
-### Analytics
-
-The office POSTs `{"action":"analytics"}` to `SOCIAL_ANALYTICS_URL` (or to `SOCIAL_WEBHOOK_URL` when the separate URL is empty) and expects:
-
-```json
-{
-  "accounts": [
-    { "platform": "x", "handle": "abisena", "displayName": "Abisena", "followers": 1200 }
-  ],
-  "posts": [
-    {
-      "platform": "x", "externalId": "123", "caption": "…",
-      "postedAt": "2026-10-19T09:00:00Z", "permalink": "https://…",
-      "likes": 42, "comments": 7, "shares": 3, "saves": 1,
-      "impressions": 9000, "reach": 7000, "clicks": 120
-    }
-  ]
-}
-```
-
-Push the same payload to `POST /api/social/analytics` with header `x-social-secret`. Missing metrics stay unavailable; the office never estimates them.
-
-### Media generation
-
-The office POSTs:
-
-```json
-{ "action": "generate_media", "type": "image", "prompt": "…", "campaignId": "…", "label": "Option A" }
-```
-
-Respond with `{"url":"https://…"}` (optionally `thumbnailUrl`, `note`). Use a public HTTPS URL if you want Telegram to show a photo preview. Local `/api/media/…` URLs render inside the office.
-
-If no media webhook exists and `OPENAI_IMAGE_MODEL` + `OPENAI_API_KEY` are set, images are generated directly and saved under `DATA_DIR/media`. Video generation needs the webhook.
-
-## In-game flow
-
-1. Hire at least one **Creative** employee and one **Social Media** employee in HR. Both need a working agent provider/model for real output.
-2. Run research normally, or open any report and choose **Create social campaign**.
-3. In **Boss laptop → Social media → New campaign**, choose platform, brief, Creative owner, Social Media owner, optional research report, and number of options.
-4. Creative returns structured options (headline, caption, hashtags, image/video prompt). Media is generated when configured.
-5. Review in **Pipeline** or Telegram. Approve one option, or request a revision with feedback.
-6. Approved work is published through `SOCIAL_WEBHOOK_URL`; the result and URL are stored on the campaign.
-7. **Analytics** shows synced accounts, latest posts, likes, comments, shares, saves, reach, impressions, clicks and engagement rate.
-
-## Honest limits
-
-- No platform OAuth is implemented inside the office. Platform credentials stay in your automation workflow.
-- Publishing requires the local server, the configured webhook and the automation workflow to be running.
-- Creative output is parsed as JSON. If an agent returns prose, the full response becomes one reviewable text option instead of being silently discarded.
-- Media generation is only as good as the configured image/video service.
-- Telegram photo/video previews require publicly reachable HTTPS URLs.
-- This remains a trusted single-user local application, not a multi-tenant hosted service.
+Only chat ids listed in `TELEGRAM_CHAT_ID` may approve or revise.
