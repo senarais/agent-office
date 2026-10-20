@@ -153,7 +153,7 @@ test('old v1/v2 local snapshots upgrade into a first business without resetting 
   };
   delete legacy.settings.weaponDamage; delete legacy.settings.blood; delete (legacy.player as Record<string, unknown>).food; delete (legacy.player as Record<string, unknown>).drinks;
   const upgraded = migrateState(legacy); const office = upgraded.offices[0];
-  assert.equal(upgraded.version, 3); assert.equal(upgraded.activeOfficeId, office.id);
+  assert.equal(upgraded.version, 4); assert.equal(upgraded.activeOfficeId, office.id);
   assert.equal(office.employees[0].providerId, 'preserved-provider'); assert.equal(office.employees[0].corpsePresent, true); assert.equal(office.employees[0].currentHp, 0); assert.equal(office.employees[0].diedAt, '2026-01-01T00:00:00Z');
   assert.equal(upgraded.settings.weaponDamage.knife, 18); assert.equal(upgraded.director.food, 3); assert.ok(upgraded.director.inventory.includes('Knife'));
   assert.deepEqual(office.playerPosition, { x: 680, y: 400 });

@@ -42,6 +42,9 @@ export class GameState {
   set socialLastSyncAt(value: string | undefined) { this.active.socialLastSyncAt = value; }
   get socialAnalyticsError() { return this.active.socialAnalyticsError; }
   set socialAnalyticsError(value: string | undefined) { this.active.socialAnalyticsError = value; }
+  get workflows() { return this.active.workflows; }
+  get workflowRuns() { return this.active.workflowRuns; }
+  get socialPostPlans() { return this.active.socialPostPlans; }
   get savedAt() { return this.save.savedAt; }
   set savedAt(value: string) { this.save.savedAt = value; }
   get storage() { return this.save.storage; }
@@ -70,6 +73,7 @@ export function view(state: GameState): WorldState {
     socialAccounts: o.socialAccounts, socialPosts: o.socialPosts, socialCampaigns: o.socialCampaigns, socialPublishes: o.socialPublishes,
     socialSettings: o.socialSettings,
     socialLastSyncAt: o.socialLastSyncAt, socialAnalyticsError: o.socialAnalyticsError,
+    workflows: o.workflows, workflowRuns: o.workflowRuns, socialPostPlans: o.socialPostPlans,
     events: state.save.events, settings: state.save.settings, integrations: integrationStatus(state.save.settings), skills: skillCatalog(),
     player: { ...state.save.director, x: o.playerPosition.x, y: o.playerPosition.y },
     savedAt: state.save.savedAt, storage: state.save.storage,

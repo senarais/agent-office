@@ -39,6 +39,7 @@ No page router or dashboard navigation. React only owns title/HUD and pixel wind
 | --- | --- |
 | `packages/shared/src/types.ts` | Employee/task/provider/message/report/meeting records, integrations and SSE event union |
 | `packages/shared/src/social.ts` | Social campaign/options/posts/publish records and tolerant creative-JSON parser |
+| `packages/shared/src/workflow.ts` | Workflow definition/run/step records, strict social-schedule parser, timezone resolution and presets |
 | `packages/shared/src/skills.ts` | Browser-facing skill summary/preview types |
 | `packages/shared/src/world.ts` | Canonical compact map, interaction points, collision footprints, workstations, A* |
 | `apps/game/src/game/OfficeScene.ts` | Input, movement, interpolation, interactions, animation, camera, world effects |
@@ -101,6 +102,14 @@ The Social Media division adds a campaign record per content brief. `createSocia
 `social.ts` owns a persistent Chromium profile per platform under `DATA_DIR/browser/`. A headed login window is exposed from the in-game Connections screen; posting and analytics run headless by default. X uses the composer/Post UI, including media attachment. Instagram uses the Create/upload/Next/Share UI. Analytics scrape the logged-in public profile (latest 12 X posts, latest 6 Instagram posts) and merge by platform plus external id/permalink. UI selectors and human-verification challenges can fail; those failures are reported, never hidden.
 
 Platform passwords/tokens are never stored in the office save. The profile directory contains live cookies and must be treated as a secret. Telegram remains an optional approval/report bridge and is independent of browser publishing.
+
+## Workflows
+
+A workflow is a durable DAG of real agent tasks. Definitions are validated (unique IDs, no self/unknown dependency, no cycle) and snapshotted into each `WorkflowRun`; the engine starts a step only when all dependencies are approved or completed. Each step creates a normal `Task`, and its `Report` carries a `workflow` reference so the existing report approve/revise path (office and Telegram) becomes the workflow approval path. Revisions create a new task for the same employee with the previous output and feedback.
+
+The scheduler owns due occurrences for definitions with a schedule. Runs never overlap; downtime coalesces one catch-up. In-flight work is marked failed on restart rather than resumed silently. Workflow step reports always attempt Telegram delivery; the report records `sent`, `failed` or `not-configured`.
+
+`kind: 'social-plan'` steps parse strict JSON posting schedules. Time-only entries resolve in the workflow timezone; past times roll to the next day. On approval, `socialPostPlans` becomes the publishing queue: a one-second tick publishes due items through the existing Playwright bridge, records a normal `SocialPost`, and leaves failures explicit. A plan caught publishing during restart is marked failed to avoid silent duplicates.
 
 ## Agent skills
 

@@ -31,13 +31,14 @@ function fromSingleOffice(old: WorldState): GameSave {
     tortureSessions: old.tortureSessions || [], history: old.history || [], incidents: old.incidents || [],
     socialAccounts: [], socialPosts: [], socialCampaigns: [], socialPublishes: [],
     socialSettings: { ...defaultSocialBrowserSettings },
+    workflows: [], workflowRuns: [], socialPostPlans: [],
     playerPosition: { x: old.player?.x ?? spawn.x, y: old.player?.y ?? spawn.y },
   };
-  return normalizeSave({ version: 3, company: { id: company.id, name: company.name }, settings, providers: old.providers || [], director, activeOfficeId: office.id, offices: [office], events: old.events || [], savedAt: old.savedAt || new Date().toISOString(), storage: old.storage || { mode: 'local' } });
+  return normalizeSave({ version: 4, company: { id: company.id, name: company.name }, settings, providers: old.providers || [], director, activeOfficeId: office.id, offices: [office], events: old.events || [], savedAt: old.savedAt || new Date().toISOString(), storage: old.storage || { mode: 'local' } });
 }
 
 function normalizeSave(save: GameSave): GameSave {
-  save.version = 3;
+  save.version = 4;
   save.settings = normalizeSettings(save.settings);
   save.providers ??= [];
   save.events ??= [];
@@ -55,8 +56,23 @@ function normalizeSave(save: GameSave): GameSave {
     office.employees ??= []; office.tasks ??= []; office.conversations ??= []; office.messages ??= []; office.reports ??= []; office.meetings ??= [];
     office.recurringTasks ??= []; office.scheduleRuns ??= []; office.tortureSessions ??= []; office.history ??= []; office.incidents ??= [];
     office.socialAccounts ??= []; office.socialPosts ??= []; office.socialCampaigns ??= []; office.socialPublishes ??= [];
+    office.workflows ??= []; office.workflowRuns ??= []; office.socialPostPlans ??= [];
     office.socialSettings = { ...defaultSocialBrowserSettings, ...office.socialSettings };
-    for (const rule of office.recurringTasks) rule.telegramNotify ??= false;
+    for (const rule of office.recurringTasks) rule.telegramNotify ??= true;
+    for (const workflow of office.workflows) {
+      workflow.steps ??= []; workflow.enabled ??= true; workflow.telegramNotify ??= true; workflow.timezone ||= 'UTC'; workflow.schedule ??= null;
+      for (const step of workflow.steps) {
+        step.tools ??= []; step.dependsOn ??= []; step.requiresApproval ??= false; step.kind ??= 'agent'; step.expectedPosts ??= 3;
+        step.platform ??= step.kind === 'social-plan' ? 'x' : undefined;
+      }
+    }
+    for (const run of office.workflowRuns) {
+      run.steps ??= []; run.errors ??= [];
+      for (const step of run.steps) {
+        step.output ??= ''; step.revisionCount ??= 0; step.tools ??= []; step.dependsOn ??= []; step.requiresApproval ??= false; step.kind ??= 'agent';
+      }
+    }
+    for (const plan of office.socialPostPlans) { plan.hashtags ??= []; plan.attempts ??= 0; }
     office.playerPosition ??= { ...entry };
     if (!canStand(office.playerPosition)) office.playerPosition = { ...entry };
     for (const e of office.employees) {
@@ -78,6 +94,7 @@ export function freshOffice(company: { id: string; name: string }, name?: string
     employees: [], tasks: [], conversations: [], messages: [], reports: [], meetings: [], recurringTasks: [], scheduleRuns: [], tortureSessions: [], history: [], incidents: [],
     socialAccounts: [], socialPosts: [], socialCampaigns: [], socialPublishes: [],
     socialSettings: { ...defaultSocialBrowserSettings },
+    workflows: [], workflowRuns: [], socialPostPlans: [],
     playerPosition: { ...entry },
   };
 }

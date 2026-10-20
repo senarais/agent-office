@@ -1,0 +1,27 @@
+.workflow-run{border:2px solid #6c855b;background:#233c2d;padding:20px;margin:18px 0;box-shadow:4px 4px 0 #162e21}
+.workflow-run>header{display:flex;gap:18px;align-items:flex-start;margin-bottom:14px}
+.workflow-run h3{margin:0 0 8px}
+.workflow-run p{font-size:9px}
+.workflow-steps{display:flex;flex-direction:column;gap:12px;margin-top:14px}
+.workflow-step{border:2px solid #60764f;background:#203a2a;padding:14px}
+.workflow-step.awaiting{border-color:#d8c17e;box-shadow:inset 0 0 0 2px #6c6648}
+.workflow-step-head{display:flex;align-items:flex-start;gap:12px;margin-bottom:10px}
+.workflow-step-head b{font-size:11px;color:#f0e3b7}
+.workflow-step-head small{display:block;font-size:8px;color:#a9b69b;margin-top:4px;overflow-wrap:anywhere}
+.step-number{display:flex;align-items:center;justify-content:center;width:24px;height:24px;border:2px solid #6c855b;background:#172f20;color:#eee0aa;font-size:10px;flex:none}
+.workflow-step details{margin:10px 0}
+.workflow-step details summary{font-size:8px;cursor:pointer}
+.workflow-step details pre{font-size:9px;max-height:240px;overflow:auto}
+.workflow-approval{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+.workflow-plan{margin-top:12px;border-top:2px solid #526d47;padding-top:10px}
+.workflow-plan h4{margin:0 0 8px;font-size:9px;color:#f0e3b7}
+.plan-list{display:flex;flex-direction:column;gap:10px;margin:12px 0}
+.plan-item{border:2px solid #60764f;background:#203a2a;padding:12px}
+.plan-item p{white-space:pre-wrap;overflow-wrap:anywhere;font-size:10px!important;line-height:1.8;margin:8px 0}
+.plan-item small{display:block;overflow-wrap:anywhere;color:#a9b69b}
+.plan-time{display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:9px}
+.plan-time b{font-size:9px;color:#f0e3b7}
+.plan-meta{display:flex;gap:10px;flex-wrap:wrap;align-items:center;font-size:8px;margin-top:8px}
+.plan-meta .inline-error{flex-basis:100%}
+.editor-step{margin:12px 0}
+@media(max-width:760px){.workflow-run{padding:14px}.workflow-run>header{flex-wrap:wrap}.workflow-step{padding:12px}.plan-time{align-items:flex-start;flex-direction:column}}

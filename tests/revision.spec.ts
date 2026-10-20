@@ -73,7 +73,7 @@ test('recurring tasks run while browser is away; machine control persists and ca
   const errors: string[] = []; page.on('pageerror', e => errors.push(e.message)); await enter(page); const e = await hire(page, 'Scheduled colleague', 'QA');
   await device(page, 1112, 600, 'ABISENA OS'); await page.getByRole('button', { name: 'Recurring tasks Set it once. Autopilot.' }).click(); await page.getByRole('button', { name: '+ New recurring task' }).click();
   await page.getByLabel('Schedule name', { exact: true }).fill('Automatic office briefing'); await page.getByLabel('Assigned employee').selectOption(e.id); await page.getByLabel('Schedule type').selectOption('once');
-  await page.getByLabel('Task instructions', { exact: true }).fill('Verify automatic task execution and generate a report.'); await page.getByLabel('Output destination').selectOption('printer'); await page.getByLabel('Employee delivers report', { exact: true }).uncheck();
+  await page.getByLabel('Task instructions', { exact: true }).fill('Verify automatic task execution and generate a report.'); await page.getByLabel('Output destination').selectOption('printer'); await expect(page.getByLabel('Send report to Telegram', { exact: true })).toBeChecked(); await page.getByLabel('Employee delivers report', { exact: true }).uncheck();
   const runAt = await page.evaluate(() => { const d = new Date(Date.now() + 6000); return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 19); }); await page.getByLabel('Run once at', { exact: true }).fill(runAt); await page.getByRole('button', { name: 'Save recurring task' }).click();
   const rule = (await state(page)).recurringTasks.find(r => r.name === 'Automatic office briefing')!; expect(rule.id).toBeTruthy();
   await page.goto('about:blank'); await expect.poll(async () => (await state(page)).scheduleRuns.find(r => r.recurringTaskId === rule.id)?.status, { timeout: 25000 }).toBe('completed');
@@ -86,6 +86,36 @@ test('recurring tasks run while browser is away; machine control persists and ca
   await page.getByRole('button', { name: 'Release employee', exact: true }).click(); await expect.poll(async () => (await state(page)).employees.find(p => p.id === e.id)!.tortureId).toBeUndefined();
   await device(page, 1112, 600, 'ABISENA OS'); await page.getByRole('button', { name: 'Recurring tasks Set it once. Autopilot.' }).click(); await page.getByRole('button', { name: 'Edit schedule' }).click(); await page.getByLabel('Schedule type').selectOption('interval'); await page.getByLabel('Interval (minutes)').fill('30'); await page.getByRole('button', { name: 'Save recurring task' }).click(); await page.getByRole('button', { name: 'Pause', exact: true }).click(); await expect.poll(async () => (await state(page)).recurringTasks.find(r => r.id === rule.id)!.enabled).toBe(false); await page.getByRole('button', { name: 'Resume', exact: true }).click(); await expect.poll(async () => (await state(page)).recurringTasks.find(r => r.id === rule.id)!.enabled).toBe(true); await page.screenshot({ path: 'docs/screenshots/recurring-tasks.png', animations: 'disabled' });
   await page.getByRole('button', { name: 'Delete', exact: true }).click(); await page.getByRole('button', { name: 'Delete schedule', exact: true }).click(); await expect.poll(async () => (await state(page)).recurringTasks.find(r => r.id === rule.id)!.deletedAt).toBeTruthy(); await command(page, `/employees/${e.id}/fire`, {}); expect(errors).toEqual([]);
+});
+
+test('workflow screen builds a flow, waits for approval, accepts a revision and completes', async ({ page }) => {
+  const errors: string[] = []; page.on('pageerror', e => errors.push(e.message)); await enter(page);
+  const e = await hire(page, 'Flow operator', 'Research');
+  await device(page, 1112, 600, 'ABISENA OS'); await page.getByRole('button', { name: 'Workflows One flow. Many agents.' }).click();
+  await expect(page.getByRole('heading', { name: 'One flow. Many agents.' })).toBeVisible();
+  await page.getByRole('button', { name: '+ New workflow' }).click();
+  await page.getByLabel('Workflow name', { exact: true }).fill('Browser smoke flow');
+  await page.getByRole('button', { name: '+ Add step' }).click();
+  await page.getByLabel('Step name', { exact: true }).fill('Prepare a briefing');
+  await page.getByLabel('Assigned employee', { exact: true }).selectOption(e.id);
+  await page.getByLabel('Step instructions', { exact: true }).fill('Prepare a short briefing and report it with evidence.');
+  await page.getByLabel('Pause for my approval after this step', { exact: true }).check();
+  await page.getByRole('button', { name: 'Save workflow' }).click();
+  await expect.poll(async () => (await state(page)).workflows.some(w => w.name === 'Browser smoke flow')).toBe(true);
+  const definition = (await state(page)).workflows.find(w => w.name === 'Browser smoke flow')!;
+  await page.getByRole('tab', { name: 'Definitions' }).click(); await expect(page.getByRole('heading', { name: 'Browser smoke flow' })).toBeVisible();
+  await page.getByRole('button', { name: 'Run now' }).click();
+  await expect.poll(async () => (await state(page)).workflowRuns.find(r => r.workflowId === definition.id)?.status, { timeout: 60000 }).toBe('waiting_approval');
+  await page.getByRole('tab', { name: 'Approvals' }).click();
+  const step = (await state(page)).workflowRuns.find(r => r.workflowId === definition.id)!.steps[0];
+  await page.getByLabel(`Revision instructions for “${step.name}”`).fill('Tighten the briefing and keep every claim factual.');
+  await page.getByRole('button', { name: 'Request revision' }).click();
+  await expect.poll(async () => { const run = (await state(page)).workflowRuns.find(r => r.workflowId === definition.id); return run && run.steps[0].revisionCount === 1 && run.steps[0].status === 'awaiting_approval' && run.status === 'waiting_approval'; }, { timeout: 60000 }).toBe(true);
+  await page.getByRole('button', { name: 'Approve & continue' }).click();
+  await expect.poll(async () => (await state(page)).workflowRuns.find(r => r.workflowId === definition.id)?.status, { timeout: 30000 }).toBe('completed');
+  await page.getByRole('tab', { name: 'Runs' }).click();
+  await expect(page.getByText('COMPLETED', { exact: true })).toBeVisible(); await page.screenshot({ path: 'docs/screenshots/workflows.png', animations: 'disabled' });
+  expect(errors).toEqual([]);
 });
 
 test('development HTTP server never serves vault keys or SQLite save files', async ({ page }) => {

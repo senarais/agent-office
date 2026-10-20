@@ -3,6 +3,7 @@ import { socialPlatforms } from '../../../../packages/shared/src/social';
 import type { SocialBrowserSettings, SocialCampaign, SocialOption, SocialPlatform } from '../../../../packages/shared/src/social';
 import { api, useGame } from '../state';
 import { Empty, Field, PixelButton, PixelTabs, useAction } from './kit';
+import { SocialPlanList } from './Workflows';
 
 const platformName = (platform: SocialPlatform) => platform === 'x' ? 'X / TWITTER' : platform.toUpperCase();
 const statusTone = (status: SocialCampaign['status']) => ['failed', 'cancelled'].includes(status) ? 'warning' : '';
@@ -47,7 +48,7 @@ function CampaignCreator({ reportId }: { reportId?: string }) {
   const [form, setForm] = useState({ title: report?.title || '', brief: report?.text.slice(0, 2000) || '', platform: 'x' as SocialPlatform, creativeEmployeeId: creative[0]?.id || '', socialEmployeeId: social[0]?.id || '', researchReportId: report?.id || '', expectedOptions: 3 });
   const set = (key: keyof typeof form, value: unknown) => setForm(current => ({ ...current, [key]: value }));
   const reports = [...world.reports].reverse();
-  return <form onSubmit={event => { event.preventDefault(); void run(async () => { await api('/social/campaigns', form); setForm(current => ({ ...current, title: '', brief: '', researchReportId: '' })); useGame.getState().toast('Campaign sent to Creative. Options will return for review.'); }); }}>
+  return <form onSubmit={event => { event.preventDefault(); void run(async () => { await api('/social/campaigns', { ...form, researchReportId: form.researchReportId || undefined }); setForm(current => ({ ...current, title: '', brief: '', researchReportId: '' })); useGame.getState().toast('Campaign sent to Creative. Options will return for review.'); }); }}>
     <span className="eyebrow">CREATIVE → SOCIAL MEDIA PIPELINE</span><h2>From research to a reviewable post.</h2>
     <p>Creative produces real caption/image/video options. You review them here or in Telegram. Approved work is posted by the local Playwright browser worker using the account session you logged in once.</p>
     {(!creative.length || !social.length) && <p className="note">This pipeline needs at least one active Creative employee and one active Social Media employee. Hire both in HR. Nothing is simulated when they are missing.</p>}
@@ -124,10 +125,12 @@ export function SocialMedia({ reportId }: { reportId?: string }) {
   const world = useGame(s => s.world!); const [tab, setTab] = useState('Pipeline');
   const campaigns = [...world.socialCampaigns].reverse();
   return <>
-    <div className="section-heading"><div><span className="eyebrow">SOCIAL MEDIA / STUDIO</span><h2>Research → Creative → Your call.</h2><p>Review real options, request revisions, and let the approved post publish automatically. Telegram can do all of it.</p></div><div className="social-summary"><span className={`tag ${world.integrations.telegram.configured ? '' : 'warning'}`}>TELEGRAM {world.integrations.telegram.configured ? 'ON' : 'OFF'}</span><span className={`tag ${world.integrations.social.browser ? '' : 'warning'}`}>BROWSER {world.integrations.social.browser ? 'ON' : 'OFF'}</span><span className="tag">X {world.socialSettings.xEnabled ? 'ON' : 'OFF'}</span><span className="tag">IG {world.socialSettings.instagramEnabled ? 'ON' : 'OFF'}</span><span className="tag">{campaigns.filter(c => c.status === 'review').length} TO REVIEW</span></div></div>
-    <PixelTabs values={['Pipeline', 'New campaign', 'Analytics', 'Connections']} current={tab} onChange={setTab} />
+    <div className="section-heading"><div><span className="eyebrow">SOCIAL MEDIA / STUDIO</span><h2>Research → Creative → Your call.</h2><p>Review real options, request revisions, and let the approved post publish automatically. Telegram can do all of it. For recurring daily flows, use <b>Workflows</b>.</p></div><div className="social-summary"><span className={`tag ${world.integrations.telegram.configured ? '' : 'warning'}`}>TELEGRAM {world.integrations.telegram.configured ? 'ON' : 'OFF'}</span><span className={`tag ${world.integrations.social.browser ? '' : 'warning'}`}>BROWSER {world.integrations.social.browser ? 'ON' : 'OFF'}</span><span className="tag">X {world.socialSettings.xEnabled ? 'ON' : 'OFF'}</span><span className="tag">IG {world.socialSettings.instagramEnabled ? 'ON' : 'OFF'}</span><span className="tag">{campaigns.filter(c => c.status === 'review').length} TO REVIEW</span><span className="tag">{world.socialPostPlans.filter(plan => ['approved', 'proposed'].includes(plan.status)).length} SCHEDULED</span></div></div>
+    <div className="form-actions"><PixelButton onClick={() => useGame.getState().open('workflows')}>Open recurring workflows</PixelButton><PixelButton onClick={() => useGame.getState().open('workflow-edit', 'preset:social-daily')}>Set up daily posting flow</PixelButton></div>
+    <PixelTabs values={['Pipeline', 'New campaign', 'Schedule', 'Analytics', 'Connections']} current={tab} onChange={setTab} />
     {tab === 'Pipeline' && (!campaigns.length ? <Empty>No campaigns yet. Start from a research report, or compose a brief in New campaign.</Empty> : campaigns.map(campaign => <CampaignCard key={campaign.id} campaign={campaign} />))}
     {tab === 'New campaign' && <CampaignCreator reportId={reportId} />}
+    {tab === 'Schedule' && <><span className="eyebrow">WORKFLOW SCHEDULE / PUBLISHING QUEUE</span><h3>Today’s approved posts.</h3><p>Approved workflow plans publish automatically at these times. Failures are real browser failures, never silent successes.</p><SocialPlanList /></>}
     {tab === 'Analytics' && <SocialAnalytics />}
     {tab === 'Connections' && <SocialConnections />}
   </>;

@@ -40,12 +40,13 @@ Run these files in order:
 2. [`supabase/migrations/20261006213943_scheduler_combat_and_torture.sql`](../supabase/migrations/20261006213943_scheduler_combat_and_torture.sql)
 3. [`supabase/migrations/20261015000000_multi_office.sql`](../supabase/migrations/20261015000000_multi_office.sql)
 4. [`supabase/migrations/20261019000000_social_media_telegram.sql`](../supabase/migrations/20261019000000_social_media_telegram.sql)
+5. [`supabase/migrations/20261020000000_workflows.sql`](../supabase/migrations/20261020000000_workflows.sql)
 
 **Existing installation:** apply only the newer additive files. They do not delete employees, tasks, reports, connections or history.
 
 No schema invention is required. The migrations are transactional and create:
 
-`companies`, `employees`, `employee_appearance`, `employee_provider_config`, `employment_history`, `tasks`, `task_events`, `conversations`, `messages`, `reports`, `meetings`, `meeting_participants`, `meeting_messages`, `provider_connections`, `game_settings`, `company_settings`, `office_state`, `player_state`, `inventory`, `incidents`, `recurring_tasks`, `scheduled_task_runs`, `torture_sessions`, `office_branding`, `social_accounts`, `social_posts`, `social_campaigns`, `social_publishes`.
+`companies`, `employees`, `employee_appearance`, `employee_provider_config`, `employment_history`, `tasks`, `task_events`, `conversations`, `messages`, `reports`, `meetings`, `meeting_participants`, `meeting_messages`, `provider_connections`, `game_settings`, `company_settings`, `office_state`, `player_state`, `inventory`, `incidents`, `recurring_tasks`, `scheduled_task_runs`, `torture_sessions`, `office_branding`, `social_accounts`, `social_posts`, `social_campaigns`, `social_publishes`, `workflows`, `workflow_runs`, `workflow_step_runs`, `social_post_plans`.
 
 Each record has UUID primary key, `created_at`, `updated_at`, JSONB payload and indexed company relationship. Generated typed columns support employment status, task state, employee/conversation/meeting relationships. Status constraints reject invalid states. Provider metadata explicitly rejects raw credential fields.
 
@@ -121,4 +122,4 @@ None required. Appearance is modular JSON, music is bundled, and small text/code
 
 ## Verification performed
 
-Both migrations executed successfully against a disposable PostgreSQL 16 database. `tests/database-check.sql` verifies the original tables; `tests/revision-database-check.sql` verifies HP/corpse/resurrection state, schedule FK/occurrence uniqueness, machine/session records and new RLS policies. All 23/23 tables were confirmed RLS-enabled. No hosted schema migration was applied by development tooling. Configure your project URL/key and apply the SQL files before using the remote replica.
+The migrations executed successfully against a disposable PostgreSQL 16 database. `tests/database-check.sql` verifies the original tables; `tests/revision-database-check.sql` verifies HP/corpse/resurrection state, schedule FK/occurrence uniqueness, machine/session records and new RLS policies. All migrated tables were confirmed RLS-enabled. No hosted schema migration was applied by development tooling. Configure your project URL/key and apply the SQL files before using the remote replica.

@@ -1,6 +1,7 @@
 import type { Engine } from './engine';
 import type { Office, Report } from '../../../packages/shared/src/types';
 import type { SocialCampaign, SocialPublish } from '../../../packages/shared/src/social';
+import type { SocialPlanItem, WorkflowRun, WorkflowStepRun } from '../../../packages/shared/src/workflow';
 import { telegramChatIds, telegramConfigured } from './integrations';
 import { safeError } from './providers';
 
@@ -117,6 +118,32 @@ export class TelegramService {
     else await this.sendText(`⚠️ PUBLISH FAILED · ${office.name}\n${campaign.title}\n${publish.error || 'Unknown publishing error'}`);
   }
 
+  async notifyWorkflowReview(office: Office, run: WorkflowRun, step: WorkflowStepRun, report: Report, plan: SocialPlanItem[]) {
+    const employee = office.employees.find(item => item.id === step.employeeId)?.name || 'Employee';
+    const index = run.steps.findIndex(item => item.id === step.id) + 1;
+    const approval = step.status === 'awaiting_approval';
+    const revisionAllowed = approval || step.status === 'failed';
+    const header = `🔁 WORKFLOW · ${office.name}\n${run.workflowName} · step ${index}/${run.steps.length}\n${step.name} · ${employee}${approval ? ' · WAITING FOR APPROVAL' : step.status === 'failed' ? ' · FAILED · REVISION NEEDED' : ' · AUTO-COMPLETED'}\n\n`;
+    let body = `${header}${report.text}`;
+    if (plan.length) {
+      body += `\n\nPOSTING SCHEDULE · ${plan.length} posts\n${plan.map((item, position) => `${position + 1}. ${new Date(item.scheduledAt).toLocaleString()} · ${item.platform.toUpperCase()}\n${item.caption}${item.hashtags.length ? `\n${item.hashtags.join(' ')}` : ''}`).join('\n\n')}`;
+    }
+    const parts = chunks(body);
+    for (let index = 0; index < parts.length; index++) {
+      const keyboard = revisionAllowed && index === parts.length - 1
+        ? { inline_keyboard: [[...(approval ? [{ text: '✅ Approve', callback_data: `ra:${report.id}` }] : []), { text: '✏️ Request revision', callback_data: `rr:${report.id}` }]] }
+        : undefined;
+      for (const chat of telegramChatIds()) await this.api('sendMessage', { chat_id: chat, text: parts[index], disable_web_page_preview: true, ...(keyboard ? { reply_markup: keyboard } : {}) });
+    }
+  }
+
+  async notifyWorkflowFinished(office: Office, run: WorkflowRun) {
+    const icon = run.status === 'completed' ? '✅' : run.status === 'cancelled' ? '⏹️' : '⚠️';
+    const lines = [`${icon} WORKFLOW ${run.status.toUpperCase()} · ${office.name}`, run.workflowName, `Scheduled: ${new Date(run.scheduledAt).toLocaleString()}`];
+    if (run.errors.length) lines.push('', ...run.errors);
+    await this.sendText(lines.join('\n'));
+  }
+
   private async handle(update: TelegramUpdate) {
     if (update.callback_query) return this.callback(update.callback_query);
     if (update.message?.text) return this.message(String(update.message.chat.id), update.message.text);
@@ -177,9 +204,9 @@ export class TelegramService {
     const rest = text.slice(rawCommand.length).trim();
     if (['/start', '/help'].includes(command)) return this.sendText([
       'PT ABISENA · DIRECTOR BOT', '',
-      '/pending — reports and social reviews waiting',
-      '/reports — recent reports', '/campaigns — social campaigns',
-      '/approve <report-id> — approve a report',
+      '/pending — reports, workflows and social reviews waiting',
+      '/reports — recent reports', '/campaigns — social campaigns', '/workflows — recent workflow runs',
+      '/approve <report-id> — approve a report or workflow step',
       '/post <campaign-id> [option-number] — approve and publish',
       '/revise <report-or-campaign-id> <instructions> — request changes',
       '/status — integration status',
@@ -187,13 +214,18 @@ export class TelegramService {
     ].join('\n'), chatId);
     if (command === '/status') {
       const office = this.engine.office; const status = this.engine.integrationStatus();
-      return this.sendText(`ACTIVE: ${office.name}\nTelegram: ${status.telegram.configured ? 'connected' : 'not configured'}\nBrowser automation: ${status.social.browser ? `available (${status.social.headless ? 'headless' : 'headed'})` : 'unavailable'}\nX: ${office.socialSettings.xEnabled ? 'enabled' : 'off'} · ${status.social.profiles.x ? 'profile exists' : 'no profile'}\nInstagram: ${office.socialSettings.instagramEnabled ? 'enabled' : 'off'} · ${status.social.profiles.instagram ? 'profile exists' : 'no profile'}\nImages: ${status.social.media ? 'configured' : 'not configured'}\nPending reports: ${office.reports.filter(r => !r.delivered && !r.archived).length}\nSocial reviews: ${office.socialCampaigns.filter(c => c.status === 'review').length}`, chatId);
+      return this.sendText(`ACTIVE: ${office.name}\nTelegram: ${status.telegram.configured ? 'connected' : 'not configured'}\nBrowser automation: ${status.social.browser ? `available (${status.social.headless ? 'headless' : 'headed'})` : 'unavailable'}\nX: ${office.socialSettings.xEnabled ? 'enabled' : 'off'} · ${status.social.profiles.x ? 'profile exists' : 'no profile'}\nInstagram: ${office.socialSettings.instagramEnabled ? 'enabled' : 'off'} · ${status.social.profiles.instagram ? 'profile exists' : 'no profile'}\nImages: ${status.social.media ? 'configured' : 'not configured'}\nActive workflows: ${office.workflowRuns.filter(r => ['queued', 'running', 'waiting_approval', 'revision'].includes(r.status)).length}\nPending reports: ${office.reports.filter(r => !r.delivered && !r.archived).length}\nSocial reviews: ${office.socialCampaigns.filter(c => c.status === 'review').length}`, chatId);
+    }
+    if (command === '/workflows') {
+      const runs = this.engine.office.workflowRuns.slice(0, 10);
+      return this.sendText(['WORKFLOW RUNS', ...runs.map(run => `${short(run.id)} · ${run.workflowName} · ${run.status}${run.steps.some(step => step.status === 'awaiting_approval') ? ' · NEEDS APPROVAL' : ''}`), runs.length ? '' : 'No workflow runs yet.'].filter(Boolean).join('\n'), chatId);
     }
     if (command === '/pending') {
       const office = this.engine.office;
       const reports = office.reports.filter(r => !r.delivered && !r.archived).slice(-8);
       const campaigns = office.socialCampaigns.filter(c => c.status === 'review').slice(-8);
-      return this.sendText([`PENDING · ${office.name}`, '', ...reports.map(r => `REPORT ${short(r.id)} · ${r.title}`), ...campaigns.map(c => `SOCIAL ${short(c.id)} · ${c.title} · ${c.platform}`), !reports.length && !campaigns.length ? 'Nothing waiting.' : '', 'Use /approve, /post or /revise.'].filter(Boolean).join('\n'), chatId);
+      const workflows = office.workflowRuns.filter(run => run.status === 'waiting_approval').slice(-8);
+      return this.sendText([`PENDING · ${office.name}`, '', ...reports.map(r => `REPORT ${short(r.id)} · ${r.title}`), ...workflows.map(run => `WORKFLOW ${short(run.id)} · ${run.workflowName} · ${run.steps.find(step => step.status === 'awaiting_approval')?.name || 'approval'}`), ...campaigns.map(c => `SOCIAL ${short(c.id)} · ${c.title} · ${c.platform}`), !reports.length && !campaigns.length && !workflows.length ? 'Nothing waiting.' : '', 'Use /approve, /post or /revise.'].filter(Boolean).join('\n'), chatId);
     }
     if (command === '/reports') {
       const reports = this.engine.office.reports.slice(-10).reverse();

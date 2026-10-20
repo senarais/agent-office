@@ -58,6 +58,13 @@ export async function createApp(directory = process.env.DATA_DIR || '.local-data
   app.post('/api/schedules', req => engine.scheduler.save(req.body));
   app.put<{ Params: { id: string } }>('/api/schedules/:id', req => engine.scheduler.save(req.body, req.params.id));
   app.post<{ Params: { id: string } }>('/api/schedules/:id/action', req => engine.scheduler.action(req.params.id, z.object({ action: z.enum(['pause', 'resume', 'delete', 'run']) }).parse(req.body).action));
+  app.post('/api/workflows', req => engine.createWorkflow(req.body));
+  app.put<{ Params: { id: string } }>('/api/workflows/:id', req => engine.updateWorkflow(req.params.id, req.body));
+  app.post<{ Params: { id: string } }>('/api/workflows/:id/action', req => engine.workflowAction(req.params.id, z.object({ action: z.enum(['pause', 'resume', 'delete', 'run']) }).parse(req.body).action));
+  app.post<{ Params: { id: string } }>('/api/workflows/runs/:id/approve', req => { const b = z.object({ stepRunId: z.string().uuid() }).parse(req.body); return engine.approveWorkflowStep(req.params.id, b.stepRunId, 'director'); });
+  app.post<{ Params: { id: string } }>('/api/workflows/runs/:id/revise', req => { const b = z.object({ stepRunId: z.string().uuid(), instructions: z.string().trim().min(1).max(10000) }).parse(req.body); return engine.reviseWorkflowStep(req.params.id, b.stepRunId, b.instructions); });
+  app.post<{ Params: { id: string } }>('/api/workflows/runs/:id/cancel', req => engine.cancelWorkflowRun(req.params.id));
+  app.post<{ Params: { id: string } }>('/api/social/plans/:id/action', req => engine.socialPlanAction(req.params.id, z.object({ action: z.enum(['retry', 'cancel']) }).parse(req.body).action));
   app.post('/api/torture', req => { const b = z.object({ employeeId: z.string().uuid(), method: punishmentSchema, intensity: z.number().min(.5).max(2).default(1) }).parse(req.body); return engine.startTorture(b.employeeId, b.method, b.intensity); });
   app.post<{ Params: { id: string } }>('/api/torture/:id/action', req => { const b = z.object({ action: z.enum(['pause', 'resume', 'release', 'configure']), method: punishmentSchema.optional(), intensity: z.number().min(.5).max(2).optional() }).parse(req.body); return engine.tortureAction(req.params.id, b.action, b.method, b.intensity); });
   app.post<{ Params: { id: string } }>('/api/tasks/:id/action', req => { const b = z.object({ action: z.enum(['cancel', 'pause', 'retry', 'clarify']), text: z.string().max(10000).optional() }).parse(req.body); return engine.taskAction(req.params.id, b.action, b.text); });

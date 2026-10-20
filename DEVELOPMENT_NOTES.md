@@ -1,5 +1,21 @@
 # Development notes
 
+## Revision 5 — generic workflows and scheduled social publishing
+
+Implementation decisions:
+- Workflows are a generic vertical beside social campaigns: `WorkflowDefinition` (steps, dependencies, optional schedule) → `WorkflowRun` (snapshotted steps) → real `Task` + `Report`. Social media is one preset, not a special case in the runner.
+- Step dependencies are validated as a DAG (unique IDs, no self/unknown dependency, no cycle). A step starts only when every dependency is approved/completed. Assignments are snapshotted per run, so editing a definition cannot redirect in-flight work.
+- Approval is report-centric: `Report.workflow` routes the existing `reportAction` approve/revise path into the workflow engine. Telegram's existing `ra:`/`rr:` buttons therefore work for workflow steps without a second approval mechanism.
+- Revisions append feedback to the step, cancel the old proposed social plan, and execute a new provider turn for the same employee. Revision count and output history stay durable.
+- Workflow reports are always sent to Telegram (workflow steps are mandatory). If Telegram is unconfigured the report is marked `not-configured` and the failure is visible. Recurring task definitions default `telegramNotify` to true; explicit user opt-outs are preserved.
+- A `social-plan` step parses strict JSON schedules (no prose fallback). Time-only entries resolve in the workflow timezone and roll to the next day when past; ISO timestamps are used directly. Approved plan items publish through the existing Playwright bridge on a one-second server tick, create normal `SocialPost` records, and fail honestly.
+- Restart recovery marks in-flight runs failed and publishing plans failed rather than silently resuming or duplicating posts; a run already waiting for approval survives and remains actionable. Publishing plans are idempotent by plan id and one publish attempt is in flight per plan.
+- Server recovery accepts save versions 2–4; v3 becomes v4 additively. Existing social campaigns, recurring tasks, staff and histories are untouched.
+- The campaign research-source bug was an empty-string/undefined mismatch: `socialCampaignSchema` now preprocesses `""` to `undefined`, and the Social UI omits the key. The engine already supported a report-less campaign.
+- Supabase adds `workflows`, `workflow_runs`, `workflow_step_runs`, `social_post_plans` through an additive migration.
+
+Verification targets: backend lifecycle/approval/revision/schedule/overlap/restart tests, strict parser/timezone tests, empty research-source regression, mandatory Telegram defaults, production TypeScript/build, and browser smoke for the new Workflows screen.
+
 ## Revision 4 — Telegram delivery and the Social Media division
 
 Implementation decisions:

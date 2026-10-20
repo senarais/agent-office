@@ -16,7 +16,7 @@ export function freshState(): GameSave {
   office.company.goals = 'Hire our first colleague. Make something worthwhile.';
   office.playerPosition = { ...spawn };
   return {
-    version: 3, company, settings: structuredClone(defaultSettings), providers: [],
+    version: 4, company, settings: structuredClone(defaultSettings), providers: [],
     director: { appearance: { ...defaultAppearance, shirt: '#e4d9b7', jacket: '#597264' }, equipped: 'hand', coffee: 3, energyDrinks: 1, food: 3, drinks: 3, inventory: ['Office Key', 'Company Documents', 'Whip', 'Knife', 'Cartoon Rifle', 'USB Drive', 'Access Card'] },
     activeOfficeId: office.id, offices: [office], events: [], savedAt: now(), storage: { mode: 'local' },
   };
@@ -59,7 +59,7 @@ export class Store {
   }
   async restore() {
     if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY || this.hasSave()) return;
-    try { const rows = await this.remote('office_state', 'GET', undefined, `?id=eq.${this.state.company.id}&select=payload&limit=1`); if ([2, 3].includes(rows[0]?.payload?.version)) { this.state = new GameState(migrateState(rows[0].payload)); this.state.providers.forEach(p => { p.hasSecret = false; p.status = 'untested'; }); } }
+    try { const rows = await this.remote('office_state', 'GET', undefined, `?id=eq.${this.state.company.id}&select=payload&limit=1`); if ([2, 3, 4].includes(rows[0]?.payload?.version)) { this.state = new GameState(migrateState(rows[0].payload)); this.state.providers.forEach(p => { p.hasSecret = false; p.status = 'untested'; }); } }
     catch (e) { this.state.storage = { mode: 'local', restoreBlocked: true, error: `${(e as Error).message} Initial remote restore failed; remote writes are paused to protect the existing backup. Local play still saves. See docs/SUPABASE_SETUP.md.` }; }
   }
   sync(force = false): Promise<void> {
@@ -89,6 +89,10 @@ export class Store {
         social_posts: offices.flatMap(o => withOffice(o.socialPosts, o.id)),
         social_campaigns: offices.flatMap(o => withOffice(o.socialCampaigns, o.id)),
         social_publishes: offices.flatMap(o => withOffice(o.socialPublishes, o.id)),
+        workflows: offices.flatMap(o => withOffice(o.workflows, o.id)),
+        workflow_runs: offices.flatMap(o => withOffice(o.workflowRuns, o.id)),
+        workflow_step_runs: offices.flatMap(o => o.workflowRuns.flatMap(run => run.steps.map(step => ({ ...step, id: step.id, officeId: o.id, runId: run.id })))),
+        social_post_plans: offices.flatMap(o => withOffice(o.socialPostPlans, o.id)),
         meetings: offices.flatMap(o => withOffice(o.meetings, o.id)),
         employment_history: offices.flatMap(o => withOffice(o.history, o.id)),
         incidents: offices.flatMap(o => withOffice(o.incidents, o.id)),

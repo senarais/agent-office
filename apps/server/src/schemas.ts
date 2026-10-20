@@ -22,6 +22,36 @@ export const socialSettingsSchema = z.object({
 export const socialCampaignSchema = z.object({
   title: z.string().trim().min(1).max(140), brief: z.string().trim().min(1).max(20000),
   platform: z.enum(socialPlatforms), creativeEmployeeId: z.string().uuid(), socialEmployeeId: z.string().uuid(),
-  researchReportId: z.string().uuid().optional(), expectedOptions: z.number().int().min(1).max(4).default(3),
+  // The UI historically sent "" for "no research report"; treat it as absent instead of rejecting the campaign.
+  researchReportId: z.preprocess(value => value === '' || value === null ? undefined : value, z.string().uuid().optional()),
+  expectedOptions: z.number().int().min(1).max(4).default(3),
+});
+export const scheduleSchema = z.object({
+  type: z.enum(['once', 'daily', 'weekly', 'interval', 'cron']), timezone: z.string().min(1).max(80),
+  time: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/).default('09:00'), weekdays: z.array(z.number().int().min(0).max(6)).max(7).default([1, 2, 3, 4, 5]),
+  intervalMinutes: z.number().int().min(1).max(525600).default(30), cron: z.string().max(120).default('0 9 * * *'), runAt: z.string().max(40).default(''),
+});
+export const workflowStepSchema = z.object({
+  id: z.string().trim().min(1).max(80).optional(),
+  name: z.string().trim().min(1).max(140),
+  employeeId: z.string().uuid(),
+  instructions: z.string().trim().min(1).max(30000),
+  expectedOutput: z.string().max(3000).default(''),
+  tools: z.array(z.string().max(30)).max(10).default([]),
+  dependsOn: z.array(z.string().max(80)).max(12).default([]),
+  requiresApproval: z.boolean().default(false),
+  kind: z.enum(['agent', 'social-plan']).default('agent'),
+  platform: z.enum(socialPlatforms).optional(),
+  expectedPosts: z.number().int().min(1).max(12).default(3),
+});
+export const workflowSchema = z.object({
+  name: z.string().trim().min(1).max(140),
+  description: z.string().max(4000).default(''),
+  preset: z.string().max(80).optional(),
+  timezone: z.string().min(1).max(80).default('UTC'),
+  schedule: scheduleSchema.nullable().default(null),
+  enabled: z.boolean().default(true),
+  telegramNotify: z.boolean().default(true),
+  steps: z.array(workflowStepSchema).min(1).max(12),
 });
 export const settingsSchema = z.object({ master: z.number().min(0).max(1), music: z.number().min(0).max(1), sfx: z.number().min(0).max(1), ambient: z.number().min(0).max(1), dialogue: z.number().min(0).max(1), muted: z.boolean(), musicOn: z.boolean(), sfxOn: z.boolean(), ambientOn: z.boolean(), track: z.number().int().min(0).max(2), shuffle: z.boolean(), repeat: z.boolean(), time: z.enum(['local', 'day', 'night']), playerSpeed: z.enum(['normal', 'fast', 'very fast']), npcSpeed: z.enum(['normal', 'fast', 'very fast']), textSpeed: z.enum(['slow', 'normal', 'fast', 'instant']), animationSpeed: z.enum(['normal', 'fast']), pixelScale: z.number().int().min(1).max(3), windowScale: z.number().min(.8).max(1.5), cameraSmoothness: z.number().min(.01).max(1), shake: z.boolean(), crt: z.boolean(), scanlines: z.boolean(), glow: z.boolean(), weather: z.boolean(), reducedMotion: z.boolean(), damageFlash: z.boolean(), highContrast: z.boolean(), violence: z.enum(['full', 'slapstick', 'disabled']), telegramReports: z.boolean(), keys: z.object({ up: z.string().length(1), down: z.string().length(1), left: z.string().length(1), right: z.string().length(1), interact: z.string().length(1), action: z.string().length(1) }) }).partial();

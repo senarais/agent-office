@@ -38,6 +38,21 @@ Employees can follow reusable `SKILL.md` playbooks. Assign them in **HR → Edit
 
 Skills are discovered from `skills/<name>/SKILL.md`, `~/.agents/skills/<name>/SKILL.md`, and optional `SKILLS_DIR` folders. [Skill format and limits](docs/AGENT_SKILLS.md).
 
+## Revision 5: generic workflows, scheduled social publishing and mandatory reports
+
+**Workflows** are now a first-class flow engine, not a social-only pipeline. Open **Boss laptop → Workflows** or **Social media → Open recurring workflows**.
+
+- Build a flow of up to 12 real agent steps with dependencies, tool allowlists, approval gates and a daily/weekly/cron/interval schedule.
+- A step's report is passed to the next agent automatically. Load **Daily social media posting** (Research → Social Media schedule) or **Research → new program** as a starting point.
+- Waiting steps can be approved or revised in the office or Telegram. Revisions return the previous output plus your feedback to the same agent.
+- A `social-plan` step parses a real posting schedule (times, captions, hashtags). Approved items publish through the local Playwright worker at their scheduled times and appear in **Social media → Schedule** and Analytics.
+- Every workflow step report is sent to Telegram by default; if the bot is not configured, the report is marked `not-configured` honestly. Recurring tasks also default to Telegram delivery.
+- Workflow runs are snapshotted, never overlap, recover explicitly after a server restart, and fail honestly when an employee or browser is unavailable.
+
+Also fixed: creating a social campaign without a research report no longer fails because the UI used to send an empty string. The server now treats `""` as “no research source”.
+
+For an existing Supabase project, apply `supabase/migrations/20261020000000_workflows.sql` after the social migration. [Workflow guide](docs/WORKFLOWS.md).
+
 ## Quick start
 
 **Node.js 22.13+ required; Node 24 recommended.** Uses Node's built-in SQLite. No Docker required.
@@ -111,7 +126,8 @@ Typing disables movement. Core keys are remappable in **Esc → Controls**. Touc
 - **Businesses:** one PT holding several offices. Switching via the exit door or Boss laptop replaces the whole roster, work and branding on screen while shared providers/options continue across the PT. Each business runs its own schedules in the background.
 - **Employees:** user-created profiles, modular appearance, HP, six departments (including Social Media), tool permissions, morale/energy/relationship/stress/productivity, idle coffee trips, healing, resurrection, replacements and employment history. Capacity: 20 positions including unresolved deceased staff, four workstations per department.
 - **Tasks:** durable prioritized queues; real workstation arrival before execution; streamed output/tool activity; error details, retry, cancel, pause-as-cancel and saved clarifications; report delivery/revisions/approval.
-- **Recurring tasks:** server-side one-time/daily/weekly/interval/cron, timezone/DST, durable occurrence claims, no overlapping runs, bounded retry, history, pause/resume/edit/delete and selectable report output. Optional Telegram delivery per schedule. Works with browser closed while server remains running.
+- **Recurring tasks:** server-side one-time/daily/weekly/interval/cron, timezone/DST, durable occurrence claims, no overlapping runs, bounded retry, history, pause/resume/edit/delete and selectable report output. Telegram delivery is on by default. Works with browser closed while server remains running.
+- **Workflows:** reusable multi-agent flows with dependencies, approval gates, revisions, daily schedules and mandatory Telegram reports. Social media is one preset; research → program is another. Approved social plans publish at their scheduled times.
 - **Social Media:** creative campaign pipeline with structured options, generated images, office/Telegram approvals, revision loops, local Playwright browser publishing and public-profile analytics. Login sessions stay in persistent browser profiles.
 - **Agent skills:** reusable `SKILL.md` playbooks discovered from the project, user skill folders or `SKILLS_DIR`; selected skills are injected into an employee’s system prompt and can be browsed/previewed in the boss computer.
 - **Chat:** persistent conversations, streaming, cancel, retry, new conversations and bounded model context.
@@ -151,7 +167,7 @@ If Chrome is installed, tests discover `/usr/bin/google-chrome`; override with `
 
 Production frontend preview: `npm run dev:server` in one terminal, `npm run preview` in another. Normal local play uses `npm run dev`.
 
-More: [Agent skills](docs/AGENT_SKILLS.md), [Telegram + Social Media setup](docs/SOCIAL_MEDIA.md), [testing notes](docs/TESTING.md), [architecture](docs/ARCHITECTURE.md), [reference research](docs/REFERENCES.md), [audio](docs/AUDIO.md), [asset manifest](ASSETS.md), [credits](CREDITS.md).
+More: [Workflows](docs/WORKFLOWS.md), [Agent skills](docs/AGENT_SKILLS.md), [Telegram + Social Media setup](docs/SOCIAL_MEDIA.md), [testing notes](docs/TESTING.md), [architecture](docs/ARCHITECTURE.md), [reference research](docs/REFERENCES.md), [audio](docs/AUDIO.md), [asset manifest](ASSETS.md), [credits](CREDITS.md).
 
 ## Source layout
 

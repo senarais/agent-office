@@ -5,16 +5,12 @@ import type { Office } from '../../../packages/shared/src/types';
 import type { Engine } from './engine';
 import { GameError } from './engine';
 import { id } from './database';
+import { scheduleSchema } from './schemas';
 
-const scheduleSchema = z.object({
-  type: z.enum(['once', 'daily', 'weekly', 'interval', 'cron']), timezone: z.string().min(1).max(80),
-  time: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/).default('09:00'), weekdays: z.array(z.number().int().min(0).max(6)).max(7).default([1, 2, 3, 4, 5]),
-  intervalMinutes: z.number().int().min(1).max(525600).default(30), cron: z.string().max(120).default('0 9 * * *'), runAt: z.string().max(40).default(''),
-});
 export const recurringSchema = z.object({
   name: z.string().trim().min(1).max(140), description: z.string().max(2000).default(''), employeeId: z.string().uuid(), providerId: z.string().max(80).default(''), model: z.string().max(160).default(''),
   instructions: z.string().trim().min(1).max(30000), expectedOutput: z.string().max(3000).default(''), projectPath: z.string().max(1024).default(''), tools: z.array(z.string().max(30)).max(10).default([]), priority: z.enum(['Low', 'Normal', 'High']).default('Normal'),
-  schedule: scheduleSchema, outputDestination: z.enum(['printer', 'laptop', 'both']).default('both'), notify: z.boolean().default(true), autoDeliver: z.boolean().default(true), telegramNotify: z.boolean().default(false),
+  schedule: scheduleSchema, outputDestination: z.enum(['printer', 'laptop', 'both']).default('both'), notify: z.boolean().default(true), autoDeliver: z.boolean().default(true), telegramNotify: z.boolean().default(true),
   retryOnFailure: z.boolean().default(false), maxRetries: z.number().int().min(0).max(3).default(1), retryDelayMinutes: z.number().int().min(1).max(1440).default(5), enabled: z.boolean().default(true),
 });
 
@@ -36,6 +32,8 @@ export class Scheduler {
   constructor(private engine: Engine) {}
   private get s() { return this.engine.s.active; }
   private get time() { return this.engine.clock(); }
+  /** Schedule math is shared with workflow definitions without creating an engine import cycle. */
+  next(schedule: Schedule, after: number, anchor: number) { return nextOccurrence(schedule, after, anchor); }
   save(input: unknown, ruleId?: string) {
     const data = recurringSchema.parse(input); const office = this.s; const employee = this.engine.employee(data.employeeId);
     if (data.providerId && !this.engine.s.providers.some(p => p.id === data.providerId)) throw new GameError('Provider not found');
@@ -71,10 +69,18 @@ export class Scheduler {
   pauseEmployee(employeeId: string, reason: string, office: Office = this.s) {
     for (const r of office.recurringTasks.filter(r => r.employeeId === employeeId && r.enabled && !r.deletedAt)) { r.enabled = false; r.pausedReason = reason; r.nextRunAt = undefined; }
     for (const r of office.scheduleRuns.filter(r => r.employeeId === employeeId)) r.nextRetryAt = undefined;
+    for (const workflow of office.workflows.filter(w => !w.deletedAt && w.enabled && w.steps.some(step => step.employeeId === employeeId))) {
+      workflow.enabled = false; workflow.pausedReason = reason; workflow.nextRunAt = undefined; workflow.updatedAt = new Date(this.time).toISOString();
+    }
   }
   reviveEmployee(employeeId: string) {
     const office = this.s;
-    for (const r of office.recurringTasks.filter(r => r.employeeId === employeeId && r.pausedReason === 'Employee deceased' && !r.deletedAt)) { r.enabled = true; r.pausedReason = undefined; r.nextRunAt = nextOccurrence(r.schedule, this.time, Date.parse(r.createdAt)); }
+    for (const r of office.recurringTasks.filter(r => r.employeeId === employeeId && r.pausedReason?.startsWith('Employee ') && !r.deletedAt)) { r.enabled = true; r.pausedReason = undefined; r.nextRunAt = nextOccurrence(r.schedule, this.time, Date.parse(r.createdAt)); }
+    for (const workflow of office.workflows.filter(w => !w.deletedAt && w.pausedReason?.startsWith('Employee ') && w.steps.every(step => office.employees.find(e => e.id === step.employeeId)?.employmentStatus === 'active'))) {
+      workflow.enabled = true; workflow.pausedReason = undefined;
+      workflow.nextRunAt = workflow.schedule ? nextOccurrence(workflow.schedule, this.time, Date.parse(workflow.createdAt)) : undefined;
+      workflow.updatedAt = new Date(this.time).toISOString();
+    }
   }
   copyTemplates(previousId: string, employeeId: string) {
     const office = this.s, stamp = new Date(this.time).toISOString();
@@ -83,6 +89,15 @@ export class Scheduler {
       if (rule.schedule.type === 'once' && Date.parse(rule.schedule.runAt) <= this.time) { rule.enabled = false; rule.pausedReason = 'Expired one-time template; run manually or edit its date'; }
       rule.nextRunAt = rule.enabled ? nextOccurrence(rule.schedule, this.time, this.time) : undefined;
       old.enabled = false; old.nextRunAt = undefined; old.pausedReason = 'Employee replaced'; old.deletedAt = stamp; office.recurringTasks.push(rule);
+    }
+    for (const old of office.workflows.filter(w => !w.deletedAt && w.steps.some(step => step.employeeId === previousId))) {
+      const workflow = structuredClone(old);
+      workflow.id = id(); workflow.createdAt = stamp; workflow.updatedAt = stamp; workflow.lastRunAt = undefined;
+      workflow.steps = workflow.steps.map(step => step.employeeId === previousId ? { ...step, employeeId } : step);
+      workflow.enabled = old.enabled; workflow.pausedReason = undefined;
+      workflow.nextRunAt = workflow.enabled && workflow.schedule ? nextOccurrence(workflow.schedule, this.time, this.time) : undefined;
+      old.enabled = false; old.nextRunAt = undefined; old.pausedReason = 'Employee replaced'; old.deletedAt = stamp;
+      office.workflows.push(workflow);
     }
   }
   tick(time = this.time) {
@@ -113,6 +128,13 @@ export class Scheduler {
         // One catch-up run after downtime, never a burst of missed paid requests.
         rule.nextRunAt = nextOccurrence(rule.schedule, time, Date.parse(rule.createdAt));
         this.launch(rule, due, office); changed = true;
+      }
+      for (const workflow of office.workflows) {
+        if (!workflow.enabled || workflow.deletedAt || !workflow.schedule || !workflow.nextRunAt || Date.parse(workflow.nextRunAt) > time) continue;
+        const due = workflow.nextRunAt; workflow.lastRunAt = due;
+        workflow.nextRunAt = nextOccurrence(workflow.schedule, time, Date.parse(workflow.createdAt));
+        this.engine.launchWorkflow(workflow, due, office);
+        changed = true;
       }
     }
     if (changed) { this.engine.save(); this.engine.snapshot(true); }

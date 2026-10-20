@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { WorldState, ServerEvent, OfficeEvent, AttackEvent } from '../../../packages/shared/src/types';
 
-export type Screen = 'pause' | 'hr' | 'employee' | 'hire' | 'chat' | 'assign' | 'tasks' | 'network' | 'provider' | 'computer' | 'reports' | 'report' | 'meetings' | 'board' | 'company' | 'lobby' | 'analytics' | 'finance' | 'audio' | 'graphics' | 'gameplay' | 'character' | 'inventory' | 'controls' | 'coffee' | 'plant' | 'schedules' | 'schedule-edit' | 'heal' | 'torture' | 'incidents' | 'social' | 'skills';
+export type Screen = 'pause' | 'hr' | 'employee' | 'hire' | 'chat' | 'assign' | 'tasks' | 'network' | 'provider' | 'computer' | 'reports' | 'report' | 'meetings' | 'board' | 'company' | 'lobby' | 'analytics' | 'finance' | 'audio' | 'graphics' | 'gameplay' | 'character' | 'inventory' | 'controls' | 'coffee' | 'plant' | 'schedules' | 'schedule-edit' | 'heal' | 'torture' | 'incidents' | 'social' | 'skills' | 'workflows' | 'workflow-edit';
 export interface WindowState { screen: Screen; id?: string }
 interface ClientState {
   world: WorldState | null; token: string; connected: boolean; demoEnabled: boolean; entered: boolean;
