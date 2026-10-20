@@ -4,5 +4,6 @@ import '@fontsource/silkscreen/700.css';
 import './style.css';
 import './revision.css';
 import './social.css';
+import './skills.css';
 import App from './App';
 ReactDOM.createRoot(document.getElementById('root')!).render(<App />);

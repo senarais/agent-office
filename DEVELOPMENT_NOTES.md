@@ -12,8 +12,9 @@ Implementation decisions:
 - No platform passwords or OAuth tokens are stored in the office save. Persistent Chromium profiles live under `DATA_DIR/browser/<platform>` and are treated as secrets. Login is a one-time headed window; posting/analytics run headless by default.
 - Supabase receives additive `social_*` replica tables and a generated `telegram_notify` column. Existing saves gain empty social arrays, `socialSettings`, and `telegramNotify: false` without touching staff or histories.
 - Browser automation is the only social publishing path; external workflow/webhook bridges are not part of this implementation.
+- Agent skills are `SKILL.md` playbooks discovered from project `skills/`, `~/.agents/skills/` and `SKILLS_DIR`. Employees store stable skill IDs; the engine injects selected bodies (bounded to 20,000 chars) into the task/chat/meeting system prompt. The browser catalog exposes summaries only; full content uses a token-protected preview. No provider-specific skill API is required.
 
-Verification targets: backend tests for option parsing, media/review/publish/revision lifecycle, global and per-schedule Telegram toggles, analytics deduplication, and browser account settings; TypeScript/build; browser smoke via the existing Playwright harness. Real X/Instagram login and posting are user-credential checks, never claimed as automated test success.
+Verification targets: backend tests for option parsing, media/review/publish/revision lifecycle, global and per-schedule Telegram toggles, analytics deduplication, browser account settings, skill parsing/discovery and real system-prompt injection; TypeScript/build; browser smoke via the existing Playwright harness. Real X/Instagram login and posting are user-credential checks, never claimed as automated test success.
 
 ## Revision 2 — scheduled work and arcade gameplay
 

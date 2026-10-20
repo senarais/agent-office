@@ -32,6 +32,12 @@ Open it from **Boss laptop → Social media**, the **Social media studio** desk 
 
 For an existing Supabase project, apply `supabase/migrations/20261019000000_social_media_telegram.sql` after the earlier migrations.
 
+### Agent skills
+
+Employees can follow reusable `SKILL.md` playbooks. Assign them in **HR → Edit employee → Agent connection**; the selected instructions are injected into that employee’s system prompt for tasks, chat and meetings. Browse, preview and refresh available skills in **Boss laptop → Agent skills**.
+
+Skills are discovered from `skills/<name>/SKILL.md`, `~/.agents/skills/<name>/SKILL.md`, and optional `SKILLS_DIR` folders. [Skill format and limits](docs/AGENT_SKILLS.md).
+
 ## Quick start
 
 **Node.js 22.13+ required; Node 24 recommended.** Uses Node's built-in SQLite. No Docker required.
@@ -107,6 +113,7 @@ Typing disables movement. Core keys are remappable in **Esc → Controls**. Touc
 - **Tasks:** durable prioritized queues; real workstation arrival before execution; streamed output/tool activity; error details, retry, cancel, pause-as-cancel and saved clarifications; report delivery/revisions/approval.
 - **Recurring tasks:** server-side one-time/daily/weekly/interval/cron, timezone/DST, durable occurrence claims, no overlapping runs, bounded retry, history, pause/resume/edit/delete and selectable report output. Optional Telegram delivery per schedule. Works with browser closed while server remains running.
 - **Social Media:** creative campaign pipeline with structured options, generated images, office/Telegram approvals, revision loops, local Playwright browser publishing and public-profile analytics. Login sessions stay in persistent browser profiles.
+- **Agent skills:** reusable `SKILL.md` playbooks discovered from the project, user skill folders or `SKILLS_DIR`; selected skills are injected into an employee’s system prompt and can be browsed/previewed in the boss computer.
 - **Chat:** persistent conversations, streaming, cancel, retry, new conversations and bounded model context.
 - **Meetings:** 1–6 available employees physically gather; sequential real-agent contributions; stored transcript, model-produced summary/decisions/actions; convert actions to real tasks.
 - **Boss computer:** pixel desktop with company, tasks, employees, reports, finance, analytics, meetings, network and settings. Analytics uses saved task/chat usage only; unknown counts/costs are marked unavailable.
@@ -144,7 +151,7 @@ If Chrome is installed, tests discover `/usr/bin/google-chrome`; override with `
 
 Production frontend preview: `npm run dev:server` in one terminal, `npm run preview` in another. Normal local play uses `npm run dev`.
 
-More: [Telegram + Social Media setup](docs/SOCIAL_MEDIA.md), [testing notes](docs/TESTING.md), [architecture](docs/ARCHITECTURE.md), [reference research](docs/REFERENCES.md), [audio](docs/AUDIO.md), [asset manifest](ASSETS.md), [credits](CREDITS.md).
+More: [Agent skills](docs/AGENT_SKILLS.md), [Telegram + Social Media setup](docs/SOCIAL_MEDIA.md), [testing notes](docs/TESTING.md), [architecture](docs/ARCHITECTURE.md), [reference research](docs/REFERENCES.md), [audio](docs/AUDIO.md), [asset manifest](ASSETS.md), [credits](CREDITS.md).
 
 ## Source layout
 

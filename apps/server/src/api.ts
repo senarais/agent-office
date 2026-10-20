@@ -10,6 +10,7 @@ import { safeError } from './providers';
 import { view } from './gamestate';
 import { SocialService } from './social';
 import { TelegramService } from './telegram';
+import { skillCatalog, skillPreview } from './skills';
 import { canStand } from '../../../packages/shared/src/world';
 import type { ServerEvent } from '../../../packages/shared/src/types';
 import { socialPlatforms } from '../../../packages/shared/src/social';
@@ -84,6 +85,9 @@ export async function createApp(directory = process.env.DATA_DIR || '.local-data
     const b = z.object({ platform: z.enum(socialPlatforms), cookies: z.array(z.any()).min(1).max(500) }).parse(req.body);
     return engine.social.importCookies(b.platform, b.cookies);
   });
+  app.get('/api/skills', () => ({ skills: skillCatalog() }));
+  app.post('/api/skills/preview', req => skillPreview(z.object({ id: z.string().max(200) }).parse(req.body).id));
+  app.post('/api/skills/refresh', () => ({ skills: engine.refreshSkills() }));
   app.get<{ Params: { file: string } }>('/api/media/:file', (req, reply) => {
     if (!/^[a-f0-9-]+\.(png|jpe?g|webp|mp4)$/i.test(req.params.file)) throw new GameError('Media not found', 404);
     const path = join(directory, 'media', req.params.file);

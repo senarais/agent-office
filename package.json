@@ -11,7 +11,7 @@
     "dev:server": "CHOKIDAR_USEPOLLING=1 tsx watch apps/server/src/index.ts",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1",
-    "test": "tsx --test tests/core.test.ts tests/revision.test.ts tests/social.test.ts",
+    "test": "tsx --test tests/core.test.ts tests/revision.test.ts tests/social.test.ts tests/skills.test.ts",
     "test:e2e": "playwright test",
     "social:import-cookies": "node scripts/import-social-cookies.mjs",
     "assets": "python3 scripts/download-assets.py && python3 scripts/download-combat-audio.py",

@@ -11,7 +11,8 @@ import { AudioOptions, Character, Coffee, Inventory, Options, Pause } from './ui
 import { Schedules, ScheduleEditor } from './ui/Schedules';
 import { Healing, Incidents, TortureRoom } from './ui/Health';
 import { SocialMedia } from './ui/Social';
-const titles: Record<Screen, string> = { pause: 'PAUSED / TAKE YOUR TIME', hr: 'HR TERMINAL / PEOPLE & CULTURE', employee: 'A CONVERSATION', hire: 'HR / EMPLOYEE FILE', chat: 'EMPLOYEE CONVERSATION', assign: 'NEW ASSIGNMENT', tasks: 'WORK QUEUE', network: 'IT TERMINAL / AGENT NETWORK', provider: 'NEW CONNECTION', computer: 'ABISENA OS', reports: 'REPORT TRAY', report: 'INTERNAL REPORT', meetings: 'MEETING ROOM / PROJECTOR', board: 'COMPANY WHITEBOARD', company: 'PT / COMPANY RECORDS', lobby: 'PT LOBBY / BUSINESSES', analytics: 'ABISENA OS / ANALYTICS', finance: 'ABISENA OS / FINANCE', audio: 'LOUNGE RADIO / AUDIO', graphics: 'OPTIONS / GRAPHICS', gameplay: 'OPTIONS / GAMEPLAY', character: 'DIRECTOR’S WARDROBE', inventory: 'INVENTORY', controls: 'CONTROLS', coffee: 'PANTRY / COFFEE MACHINE', plant: 'A VERY GOOD FERN', schedules: 'ABISENA OS / RECURRING TASKS', 'schedule-edit': 'AUTOPILOT / SCHEDULE EDITOR', heal: 'EMPLOYEE CARE / FULL HP', torture: 'TORTURE ROOM / MACHINE CONTROLS', incidents: 'HR / INCIDENT ARCHIVE', social: 'SOCIAL MEDIA STUDIO / CAMPAIGNS' };
+import { Skills } from './ui/Skills';
+const titles: Record<Screen, string> = { pause: 'PAUSED / TAKE YOUR TIME', hr: 'HR TERMINAL / PEOPLE & CULTURE', employee: 'A CONVERSATION', hire: 'HR / EMPLOYEE FILE', chat: 'EMPLOYEE CONVERSATION', assign: 'NEW ASSIGNMENT', tasks: 'WORK QUEUE', network: 'IT TERMINAL / AGENT NETWORK', provider: 'NEW CONNECTION', computer: 'ABISENA OS', reports: 'REPORT TRAY', report: 'INTERNAL REPORT', meetings: 'MEETING ROOM / PROJECTOR', board: 'COMPANY WHITEBOARD', company: 'PT / COMPANY RECORDS', lobby: 'PT LOBBY / BUSINESSES', analytics: 'ABISENA OS / ANALYTICS', finance: 'ABISENA OS / FINANCE', audio: 'LOUNGE RADIO / AUDIO', graphics: 'OPTIONS / GRAPHICS', gameplay: 'OPTIONS / GAMEPLAY', character: 'DIRECTOR’S WARDROBE', inventory: 'INVENTORY', controls: 'CONTROLS', coffee: 'PANTRY / COFFEE MACHINE', plant: 'A VERY GOOD FERN', schedules: 'ABISENA OS / RECURRING TASKS', 'schedule-edit': 'AUTOPILOT / SCHEDULE EDITOR', heal: 'EMPLOYEE CARE / FULL HP', torture: 'TORTURE ROOM / MACHINE CONTROLS', incidents: 'HR / INCIDENT ARCHIVE', social: 'SOCIAL MEDIA STUDIO / CAMPAIGNS', skills: 'AGENT SKILLS / PLAYBOOKS' };
 
 function WindowContent({ screen, id }: { screen: Screen; id?: string }) {
   const world = useGame(s => s.world!); const employee = world.employees.find(e => e.id === id);
@@ -26,6 +27,7 @@ function WindowContent({ screen, id }: { screen: Screen; id?: string }) {
     case 'schedules': return <Schedules employeeId={id} />;
     case 'schedule-edit': return <ScheduleEditor editId={id} />;
     case 'social': return <SocialMedia reportId={id?.startsWith('report:') ? id.slice(7) : undefined} />;
+    case 'skills': return <Skills />;
     case 'heal': return <Healing employeeId={id} />;
     case 'torture': return <TortureRoom employeeId={id && world.employees.some(e => e.id === id) ? id : undefined} />;
     case 'incidents': return <Incidents />;
@@ -79,6 +81,6 @@ export default function App() {
   const s = world?.settings;
   if (!world) return <div className="boot-screen"><div className="pt-mark">PT</div><h1>ABISENA RAIS JAYA</h1><p>{bootError || 'UNLOCKING THE OFFICE…'}</p>{bootError && <PixelButton onClick={boot}>Retry local connection</PixelButton>}</div>;
   return <main className={`game-root ${s?.crt ? 'crt' : ''} ${s?.scanlines ? 'scanlines' : ''} ${s?.reducedMotion ? 'reduced-motion' : ''} ${s?.highContrast ? 'high-contrast' : ''}`} style={{ '--ui-scale': s?.windowScale } as React.CSSProperties}>
-    <GameCanvas />{!entered ? <Title /> : <><Hud />{windowState && <PixelWindow key={`${windowState.screen}:${windowState.id || ''}`} title={titles[windowState.screen]} wide={['hr', 'hire', 'computer', 'network', 'tasks', 'board', 'meetings', 'analytics', 'social'].includes(windowState.screen)} dialogue={windowState.screen === 'employee'}>{error && <div className="error-banner" role="alert"><b>!</b><p>{error}</p><button onClick={() => useGame.setState({ error: '' })} aria-label="Dismiss error">×</button></div>}<WindowContent screen={windowState.screen} id={windowState.id} /></PixelWindow>}</>}
+    <GameCanvas />{!entered ? <Title /> : <><Hud />{windowState && <PixelWindow key={`${windowState.screen}:${windowState.id || ''}`} title={titles[windowState.screen]} wide={['hr', 'hire', 'computer', 'network', 'tasks', 'board', 'meetings', 'analytics', 'social', 'skills'].includes(windowState.screen)} dialogue={windowState.screen === 'employee'}>{error && <div className="error-banner" role="alert"><b>!</b><p>{error}</p><button onClick={() => useGame.setState({ error: '' })} aria-label="Dismiss error">×</button></div>}<WindowContent screen={windowState.screen} id={windowState.id} /></PixelWindow>}</>}
   </main>;
 }

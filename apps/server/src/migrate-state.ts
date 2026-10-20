@@ -60,6 +60,7 @@ function normalizeSave(save: GameSave): GameSave {
     office.playerPosition ??= { ...entry };
     if (!canStand(office.playerPosition)) office.playerPosition = { ...entry };
     for (const e of office.employees) {
+      e.skills ??= [];
       e.maxHp ??= 100; e.currentHp ??= e.employmentStatus === 'deceased' ? 0 : e.maxHp; e.productivity ??= 100; e.corpsePresent ??= e.employmentStatus === 'deceased';
       if (e.employmentStatus === 'deceased') { e.currentHp = 0; e.diedAt ??= e.endedAt || save.savedAt; delete e.endedAt; e.state = 'dead'; e.destination = { ...e.position }; }
       else if (e.employmentStatus === 'active' && !canStand(e.position)) e.position = canStand(e.home) ? { ...e.home } : nearbyWalkable(spawn);

@@ -1,6 +1,7 @@
 import type { Director, GameSave, Office, OfficeSummary, Point, WorldState } from '../../../packages/shared/src/types';
 import { terminalTasks } from '../../../packages/shared/src/types';
 import { integrationStatus } from './integrations';
+import { skillCatalog } from './skills';
 
 /**
  * Accessor view over the persisted save. The engine and scheduler keep using `state.employees`,
@@ -69,7 +70,7 @@ export function view(state: GameState): WorldState {
     socialAccounts: o.socialAccounts, socialPosts: o.socialPosts, socialCampaigns: o.socialCampaigns, socialPublishes: o.socialPublishes,
     socialSettings: o.socialSettings,
     socialLastSyncAt: o.socialLastSyncAt, socialAnalyticsError: o.socialAnalyticsError,
-    events: state.save.events, settings: state.save.settings, integrations: integrationStatus(state.save.settings),
+    events: state.save.events, settings: state.save.settings, integrations: integrationStatus(state.save.settings), skills: skillCatalog(),
     player: { ...state.save.director, x: o.playerPosition.x, y: o.playerPosition.y },
     savedAt: state.save.savedAt, storage: state.save.storage,
     activeOfficeId: state.save.activeOfficeId, offices: state.save.offices.map(officeSummary),

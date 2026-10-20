@@ -1,5 +1,6 @@
 import type { RecurringTask, ScheduleRun, ScheduledTaskSource } from './automation';
 import type { SocialAccount, SocialBrowserSettings, SocialCampaign, SocialPost, SocialPublish } from './social';
+import type { SkillSummary } from './skills';
 export type Point = { x: number; y: number };
 export type Rect = Point & { w: number; h: number };
 export const departments = ['Development', 'Research', 'Creative', 'QA', 'Operations', 'Social Media'] as const;
@@ -14,7 +15,7 @@ export type Employment = 'active' | 'fired' | 'deceased' | 'quit';
 export type EmployeeState = 'idle' | 'walking' | 'working' | 'reading' | 'terminal' | 'waiting' | 'blocked' | 'report' | 'meeting' | 'coffee' | 'following' | 'leaving' | 'hurt' | 'dead' | 'torture';
 export interface Employee {
   id: string; name: string; role: string; department: Department; personality: string; responsibilities: string; systemPrompt: string;
-  providerId: string; model: string; tools: string[]; appearance: Appearance; employmentStatus: Employment;
+  providerId: string; model: string; tools: string[]; skills: string[]; appearance: Appearance; employmentStatus: Employment;
   state: EmployeeState; position: Point; destination: Point; home: Point; bubble: string; bubbleUntil: number;
   morale: number; energy: number; relationship: number; stress: number; hiredAt: string; endedAt?: string;
   following: boolean; reportId?: string; hurtUntil?: number;
@@ -102,7 +103,7 @@ export interface WorldState {
   socialSettings: SocialBrowserSettings;
   socialLastSyncAt?: string; socialAnalyticsError?: string;
   events: OfficeEvent[]; settings: Settings; player: Director & Point;
-  integrations: IntegrationStatus;
+  integrations: IntegrationStatus; skills: SkillSummary[];
   savedAt: string; storage: { mode: 'local' | 'supabase'; error?: string; syncedAt?: string; restoreBlocked?: boolean };
   activeOfficeId: string; offices: OfficeSummary[];
 }

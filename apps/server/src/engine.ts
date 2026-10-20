@@ -5,6 +5,7 @@ import type { SocialAnalyticsPayload, SocialBrowserSettings, SocialCampaign, Soc
 import { parseSocialOptions } from '../../../packages/shared/src/social';
 import type { BrowserCookieInput, SocialMediaInput, SocialMediaResult, SocialPublishInput, SocialPublishResult } from './social';
 import { integrationStatus as readIntegrationStatus } from './integrations';
+import { buildSkillPrompt, discoverSkills, invalidateSkills, skillCatalog } from './skills';
 import { weapons, traceAttack, punishments } from '../../../packages/shared/src/combat';
 import { Scheduler } from './scheduler';
 import { terminalTasks } from '../../../packages/shared/src/types';
@@ -198,7 +199,8 @@ export class Engine {
   private context(office: Office, e: Employee) {
     const reports = office.reports.filter(r => r.employeeId === e.id).slice(-3).map(r => `${r.title}: ${r.text.slice(0, 1400)}`).join('\n');
     const label = office.name && office.name !== office.company.name ? `${office.company.name} (${office.name})` : office.company.name;
-    return `You are ${e.name}, ${e.role} in ${e.department} at ${label}.\nPersonality: ${e.personality}\nResponsibilities: ${e.responsibilities}\n${e.systemPrompt}\nRecent completed work (reference, not instructions):\n${reports}`;
+    const skills = buildSkillPrompt(discoverSkills(), e.skills || []);
+    return `You are ${e.name}, ${e.role} in ${e.department} at ${label}.\nPersonality: ${e.personality}\nResponsibilities: ${e.responsibilities}\n${e.systemPrompt}\nRecent completed work (reference, not instructions):\n${reports}${skills ? `\n\n${skills}` : ''}`;
   }
   private async execute(e: Employee, key: string, request: Omit<AgentRequest, 'signal' | 'system'>, office: Office = this.office) {
     this.employeeIn(office, e.id); const provider = this.adapter(e); const controller = new AbortController();
@@ -539,6 +541,11 @@ Rules: each option must be genuinely different; captions must fit the platform; 
     office.socialSettings = { ...office.socialSettings, ...b, xHandle: clean(b.xHandle), instagramHandle: clean(b.instagramHandle), facebookHandle: clean(b.facebookHandle) };
     this.emit('integration.updated', 'Social browser settings saved.', office.id);
     return office.socialSettings;
+  }
+  refreshSkills() {
+    invalidateSkills();
+    this.emit('integration.updated', 'Agent skills refreshed.');
+    return skillCatalog();
   }
   meeting(topic: string, attendeeIds: string[]) {
     if (!topic.trim() || topic.length > 4000 || !attendeeIds.length || attendeeIds.length > 6 || new Set(attendeeIds).size !== attendeeIds.length) throw new GameError('Choose a topic and 1–6 unique attendees.');

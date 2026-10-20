@@ -39,6 +39,7 @@ No page router or dashboard navigation. React only owns title/HUD and pixel wind
 | --- | --- |
 | `packages/shared/src/types.ts` | Employee/task/provider/message/report/meeting records, integrations and SSE event union |
 | `packages/shared/src/social.ts` | Social campaign/options/posts/publish records and tolerant creative-JSON parser |
+| `packages/shared/src/skills.ts` | Browser-facing skill summary/preview types |
 | `packages/shared/src/world.ts` | Canonical compact map, interaction points, collision footprints, workstations, A* |
 | `apps/game/src/game/OfficeScene.ts` | Input, movement, interpolation, interactions, animation, camera, world effects |
 | `apps/game/src/game/art.ts` | Original cached furniture/character textures |
@@ -50,6 +51,7 @@ No page router or dashboard navigation. React only owns title/HUD and pixel wind
 | `apps/server/src/providers.ts` | Provider-independent execution contract and concrete adapters |
 | `apps/server/src/telegram.ts` | Long-polled Telegram bot, report/review notifications and approval callbacks |
 | `apps/server/src/social.ts` | Playwright browser worker: persistent login profiles, X/Instagram posting and public-profile analytics |
+| `apps/server/src/skills.ts` | `SKILL.md` discovery/frontmatter parsing, catalog cache and bounded prompt injection |
 | `apps/server/src/integrations.ts` | Secret-free integration status shared with the browser |
 | `apps/server/src/database.ts` | SQLite checkpoints, encrypted vault, Supabase replication/restore |
 
@@ -99,6 +101,12 @@ The Social Media division adds a campaign record per content brief. `createSocia
 `social.ts` owns a persistent Chromium profile per platform under `DATA_DIR/browser/`. A headed login window is exposed from the in-game Connections screen; posting and analytics run headless by default. X uses the composer/Post UI, including media attachment. Instagram uses the Create/upload/Next/Share UI. Analytics scrape the logged-in public profile (latest 12 X posts, latest 6 Instagram posts) and merge by platform plus external id/permalink. UI selectors and human-verification challenges can fail; those failures are reported, never hidden.
 
 Platform passwords/tokens are never stored in the office save. The profile directory contains live cookies and must be treated as a secret. Telegram remains an optional approval/report bridge and is independent of browser publishing.
+
+## Agent skills
+
+`apps/server/src/skills.ts` discovers `SKILL.md` folders from project `skills/`, `~/.agents/skills/` and optional `SKILLS_DIR` roots. A small frontmatter parser supports plain, quoted, `>` and `|` values; the body is kept server-side. The catalog is cached for five seconds and exposed as summaries in `WorldState.skills`; full content is available through a token-protected preview route.
+
+Each employee stores stable skill IDs. At provider request time, `Engine.context()` appends the selected skill bodies with their source directories, bounded to 20,000 characters. The same context is used for tasks, chat and meetings, so no provider-specific skill API is required. Skills are instructions only; agents still need filesystem/web tools to read supporting resources. Unreadable or missing skills are skipped rather than failing the employee.
 
 ## Durable state
 

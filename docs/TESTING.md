@@ -4,7 +4,9 @@
 
 `npm test` now also runs `social.test.ts`: tolerant creative-JSON parsing (fences/wrappers/prose fallback), Instagram count/caption parsing, real Creative task execution into reviewable media options, Telegram approval and publishing through a fixture browser bridge, revision loops that append options, global and per-schedule Telegram report toggles, analytics deduplication/engagement math, and browser account handle normalization.
 
-Browser flows exercise the expanded boss computer (14 apps), the new Social media studio screen reachable from the world, and the existing combat/HR flows. Live Playwright login/posting/analytics against X or Instagram depends on the user's own accounts and is not claimed as automated test success.
+`skills.test.ts` covers `SKILL.md` frontmatter (including block descriptions), folder discovery, catalog IDs, missing-skill handling, bounded prompt building, and a real task execution where the selected skill body reaches the provider system prompt.
+
+Browser flows exercise the expanded boss computer (15 apps), the new Social media studio screen reachable from the world, and the existing combat/HR flows. Live Playwright login/posting/analytics against X or Instagram depends on the user's own accounts and is not claimed as automated test success.
 
 ## Revision 2 checks
 
