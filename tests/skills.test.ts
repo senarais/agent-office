@@ -3,10 +3,11 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { Engine } from '../apps/server/src/engine';
 import { Store } from '../apps/server/src/database';
 import { defaultAppearance } from '../packages/shared/src/types';
-import { buildSkillPrompt, discoverSkillsFromRoots, invalidateSkills, parseSkillMarkdown } from '../apps/server/src/skills';
+import { buildSkillPrompt, defaultSkillRoots, discoverSkillsFromRoots, invalidateSkills, parseSkillMarkdown } from '../apps/server/src/skills';
 
 test('SKILL.md frontmatter supports block descriptions and markdown bodies', () => {
   const parsed = parseSkillMarkdown('---\nname: research\ndescription: >\n  A careful\n  research playbook.\n---\n\n# Steps\n\nSearch first.\n');
@@ -34,6 +35,40 @@ test('skill discovery reads project folders and builds a bounded employee prompt
 });
 
 async function eventually(check: () => boolean) { for (let i = 0; i < 400; i++) { if (check()) return; await new Promise(resolve => setTimeout(resolve, 10)); } assert.fail('Timed out waiting for skill prompt'); }
+
+test('skill discovery scans nested folders and tolerates lowercase SKILL.md', () => {
+  const root = mkdtempSync(join(tmpdir(), 'pt-skills-nested-'));
+  try {
+    mkdirSync(join(root, 'engineering', 'research'), { recursive: true });
+    writeFileSync(join(root, 'engineering', 'research', 'skill.md'), '---\nname: Nested Research\ndescription: Reachable below the root.\n---\n\nUse the nested playbook.\n');
+    const skills = discoverSkillsFromRoots([{ path: root, source: 'project' }]);
+    assert.equal(skills.length, 1);
+    assert.equal(skills[0].id, 'project:engineering-research');
+    assert.equal(skills[0].name, 'Nested Research');
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('default roots include project and user agent skill folders', () => {
+  const project = fileURLToPath(new URL('..', import.meta.url));
+  const paths = defaultSkillRoots().map(root => root.path);
+  for (const path of [join('skills'), join('.agents', 'skills'), join('.claude', 'skills'), join('.commandcode', 'skills')]) assert.ok(paths.includes(join(project, path)), path);
+});
+
+test('refresh rescans immediately and adds newly installed skills', () => {
+  const root = mkdtempSync(join(tmpdir(), 'pt-skills-refresh-')); const data = mkdtempSync(join(tmpdir(), 'pt-skills-refresh-data-'));
+  const previous = process.env.SKILLS_DIR;
+  process.env.SKILLS_DIR = root; invalidateSkills();
+  const engine = new Engine(new Store(data));
+  try {
+    assert.equal(engine.refreshSkills().some(skill => skill.id === 'custom:late-skill'), false);
+    mkdirSync(join(root, 'late-skill'));
+    writeFileSync(join(root, 'late-skill', 'SKILL.md'), '---\nname: Late Skill\ndescription: Installed after startup.\n---\n\nFresh playbook.\n');
+    assert.equal(engine.refreshSkills().some(skill => skill.id === 'custom:late-skill'), true);
+  } finally {
+    engine.stop(); rmSync(root, { recursive: true, force: true }); rmSync(data, { recursive: true, force: true });
+    if (previous) process.env.SKILLS_DIR = previous; else delete process.env.SKILLS_DIR; invalidateSkills();
+  }
+});
 
 test('selected skills are injected into the real task system prompt', async (t: TestContext) => {
   const root = mkdtempSync(join(tmpdir(), 'pt-skills-agent-')); const data = mkdtempSync(join(tmpdir(), 'pt-skills-data-'));

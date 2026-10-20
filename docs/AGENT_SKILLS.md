@@ -4,11 +4,20 @@ Skills are reusable `SKILL.md` playbooks that an employee can add to its agent c
 
 ## Where skills are discovered
 
-1. `skills/<name>/SKILL.md` in this project.
-2. `~/.agents/skills/<name>/SKILL.md`.
-3. Every folder listed in `SKILLS_DIR` (colon-separated).
+Project:
 
-A folder must contain `SKILL.md`. The folder name is the stable ID suffix (`project:my-skill`, `user:apple-design`, `custom:team-skill`).
+1. `skills/` — the office’s canonical playbook folder.
+2. `.agents/skills/`, `.claude/skills/`, `.commandcode/skills/`.
+
+User home:
+
+3. `~/.agents/skills/`, `~/.claude/skills/`, `~/.commandcode/skills/`.
+
+Custom:
+
+4. Every folder listed in `SKILLS_DIR` (colon-separated).
+
+Each root is scanned recursively (up to six levels), skipping dependency and build folders, so a skill can live at `engineering/research/SKILL.md` as well as directly under the root. A folder must contain `SKILL.md` (case-insensitive filename). The path below the root becomes the stable ID suffix with `/` replaced by `-` (`project:my-skill`, `project:engineering-research`, `user:apple-design`, `custom:team-skill`). If the same ID appears in multiple roots, the first root wins.
 
 ## Format
 
@@ -46,7 +55,7 @@ Open **Boss laptop → Agent skills** (or **IT terminal → Browse agent skills*
 - which active employees use it
 - full content preview
 
-**Refresh skills** clears the five-second discovery cache and rescans the folders.
+**Refresh skills** clears the five-second discovery cache and immediately rescans every root, including newly installed folders and nested playbooks.
 
 ## Limits and security
 
