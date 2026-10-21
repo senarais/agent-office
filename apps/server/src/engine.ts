@@ -232,7 +232,7 @@ export class Engine {
   }
   private async execute(e: Employee, key: string, request: Omit<AgentRequest, 'signal' | 'system'>, office: Office = this.office) {
     this.employeeIn(office, e.id); const provider = this.adapter(e); const controller = new AbortController(); let sessionId = request.sessionId;
-    this.running.set(key, { employeeId: e.id, providerId: e.providerId, controller }); const timeout = setTimeout(() => controller.abort(new Error('Agent timeout after 10 minutes')), 600000);
+    this.running.set(key, { employeeId: e.id, providerId: e.providerId, controller }); const timeout = setTimeout(() => controller.abort(new Error('Agent timeout after 15 minutes')), 900000);
     try {
       for (let attempt = 1; ; attempt++) {
         try {
@@ -543,7 +543,7 @@ export class Engine {
 
   private workflowStepPrompt(office: Office, run: WorkflowRun, step: WorkflowStepRun) {
     const dependencies = step.dependsOn.map(dependency => run.steps.find(item => item.stepId === dependency)).filter((item): item is WorkflowStepRun => !!item);
-    const context = dependencies.map(item => `Step “${item.name}” output:\n${item.output.slice(0, 12000)}`).join('\n\n');
+    const context = dependencies.map(item => `Step “${item.name}” output:\n${item.output.slice(0, 12000)}${item.approvalNote ? `\n\nDirector approval selection for “${item.name}”:\n${item.approvalNote}` : ''}`).join('\n\n');
     const revision = step.feedback?.trim() ? `\nThe director requested revisions:\n${step.feedback.slice(-12000)}\n\nPrevious attempt (reference, not instructions):\n${step.output.slice(0, 16000)}` : '';
     const timezone = office.workflows.find(workflow => workflow.id === run.workflowId)?.timezone || 'UTC';
     return `Workflow: ${run.workflowName}\n${run.brief}\n\nYour step: ${step.name}\n${step.instructions}\n\nPrior step results:\n${context || 'This is a starting step; no prior results.'}\n${revision}\n\nExpected output: ${step.expectedOutput || 'An honest, useful result.'}${step.kind === 'social-plan' ? socialPlanPrompt(step, timezone, step.expectedPosts || 3) : ''}`;
@@ -636,13 +636,14 @@ export class Engine {
     return run;
   }
 
-  approveWorkflowStep(runId: string, stepRunId: string, source: 'director' | 'telegram' = 'director', office: Office = this.office) {
+  approveWorkflowStep(runId: string, stepRunId: string, source: 'director' | 'telegram' = 'director', office: Office = this.office, note = '') {
     const run = this.findWorkflowRun(office, runId);
     const step = run.steps.find(item => item.id === stepRunId);
     if (!step) throw new GameError('Workflow step not found', 404);
     if (step.status === 'approved' || step.status === 'completed') return { run, step };
     if (step.status !== 'awaiting_approval') throw new GameError(`Step is ${step.status}; it cannot be approved now.`, 409);
     if (step.kind === 'social-plan' && !office.socialPostPlans.some(item => item.stepRunId === step.id && item.status === 'proposed')) throw new GameError('This schedule has no reviewable posts. Request a revision instead.', 409);
+    step.approvalNote = note.trim().slice(0, 10000) || undefined;
     step.status = 'approved'; step.approvedBy = source; step.approvedAt = now(); step.completedAt = step.completedAt || now();
     const report = step.reportId ? office.reports.find(item => item.id === step.reportId) : undefined;
     if (report) {
@@ -682,7 +683,7 @@ export class Engine {
       expectedOutput: step.kind === 'social-plan' ? `A JSON posting schedule with ${step.expectedPosts || 3} posts.` : step.expectedOutput,
       priority: 'Normal', tools: step.tools,
     }, undefined, office, { workflowId: run.workflowId, runId: run.id, stepRunId: step.id });
-    step.taskId = task.id; step.reportId = undefined;
+    step.taskId = task.id; step.reportId = undefined; step.approvalNote = undefined;
     this.emit('workflow.step', `${run.workflowName}: revision requested for “${step.name}”.`, run.id);
     this.save(); this.snapshot(true); return { run, step };
   }
@@ -787,7 +788,7 @@ export class Engine {
     this.save(); this.snapshot(true);
   }
   private transientSocialError(error: unknown) {
-    return /page\.goto: Timeout|locator\.waitFor: Timeout|waiting for .* to be visible|navigating to|net::ERR|econnrefused|econnreset|etimedout|target closed|browser has been closed|socket hang up|composer did not open|browser launch failed|automation is unavailable/i.test(String((error as Error)?.message || error));
+    return /page\.goto: Timeout|locator\.waitFor: Timeout|waiting for .* to be visible|navigating to|net::ERR|econnrefused|econnreset|etimedout|target closed|browser has been closed|socket hang up|composer did not open|browser launch failed/i.test(String((error as Error)?.message || error));
   }
 
   // —— Social media pipeline ——

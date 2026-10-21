@@ -61,7 +61,7 @@ export async function createApp(directory = process.env.DATA_DIR || '.local-data
   app.post('/api/workflows', req => engine.createWorkflow(req.body));
   app.put<{ Params: { id: string } }>('/api/workflows/:id', req => engine.updateWorkflow(req.params.id, req.body));
   app.post<{ Params: { id: string } }>('/api/workflows/:id/action', req => engine.workflowAction(req.params.id, z.object({ action: z.enum(['pause', 'resume', 'delete', 'run']) }).parse(req.body).action));
-  app.post<{ Params: { id: string } }>('/api/workflows/runs/:id/approve', req => { const b = z.object({ stepRunId: z.string().uuid() }).parse(req.body); return engine.approveWorkflowStep(req.params.id, b.stepRunId, 'director'); });
+  app.post<{ Params: { id: string } }>('/api/workflows/runs/:id/approve', req => { const b = z.object({ stepRunId: z.string().uuid(), note: z.string().trim().max(10000).optional() }).parse(req.body); return engine.approveWorkflowStep(req.params.id, b.stepRunId, 'director', engine.office, b.note || ''); });
   app.post<{ Params: { id: string } }>('/api/workflows/runs/:id/revise', req => { const b = z.object({ stepRunId: z.string().uuid(), instructions: z.string().trim().min(1).max(10000) }).parse(req.body); return engine.reviseWorkflowStep(req.params.id, b.stepRunId, b.instructions); });
   app.post<{ Params: { id: string } }>('/api/workflows/runs/:id/cancel', req => engine.cancelWorkflowRun(req.params.id));
   app.post<{ Params: { id: string } }>('/api/social/plans/:id/action', req => engine.socialPlanAction(req.params.id, z.object({ action: z.enum(['retry', 'cancel']) }).parse(req.body).action));

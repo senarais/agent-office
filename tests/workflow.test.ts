@@ -111,8 +111,9 @@ test('workflow passes research to the social plan, waits for approval, then publ
   assert.equal(research.reportId, undefined, 'auto-approved steps must not walk to the boss with a stale report');
   assert.deepEqual(reviews.map(review => review.status), ['awaiting_approval']);
   assert.deepEqual(reviews.map(review => review.plan), [2]);
-  f.engine.approveWorkflowStep(run!.id, planStep.id, 'telegram');
+  f.engine.approveWorkflowStep(run!.id, planStep.id, 'telegram', f.engine.office, 'Keep #1 and #3; drop the crypto one.');
   assert.equal(planStep.status, 'approved'); assert.equal(run!.status, 'completed');
+  assert.equal(planStep.approvalNote, 'Keep #1 and #3; drop the crypto one.');
   assert.ok(f.engine.s.socialPostPlans.every(item => item.status === 'approved'));
   await eventually(() => reviews.length === 2);
   assert.deepEqual(reviews.map(review => review.status), ['awaiting_approval', 'approved']);

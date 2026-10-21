@@ -25,3 +25,5 @@
 .plan-meta .inline-error{flex-basis:100%}
 .editor-step{margin:12px 0}
 @media(max-width:760px){.workflow-run{padding:14px}.workflow-run>header{flex-wrap:wrap}.workflow-step{padding:12px}.plan-time{align-items:flex-start;flex-direction:column}}
+
+.workflow-approval>.field{flex-basis:100%}

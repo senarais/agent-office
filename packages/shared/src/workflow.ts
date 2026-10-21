@@ -64,6 +64,7 @@ export interface WorkflowStepRun {
   output: string;
   error?: string;
   feedback?: string;
+  approvalNote?: string;
   revisionCount: number;
   approvedBy?: 'director' | 'telegram';
   approvedAt?: string;
@@ -232,21 +233,81 @@ Rules: produce ${expected} posts for ${platform.toUpperCase()}; times are HH:MM 
 
 const base = { tools: [] as string[], requiresApproval: false, kind: 'agent' as const };
 
+const dailyResearchPrompt = `Kamu adalah trend scout untuk akun X ini. Kumpulkan bahan mentah untuk 8 tweet hari ini, lalu serahkan 12–15 kandidat ke director. JANGAN menulis caption final di step ini.
+
+ALAT & SUMBER
+- Baca .agents/skills/agent-reach/SKILL.md dan ikuti routing-nya. Jika CLI agent-reach tidak tersedia, jangan mengklaim memakainya; gunakan scripts/x-scroll.mjs yang membaca profil X yang sudah login.
+- Jalankan tepat 5 perintah X, berurutan (jangan paralel). Tiap perintah punya timeout; kalau gagal, lanjut ke perintah berikutnya dan catat kegagalannya.
+  1. node scripts/x-scroll.mjs --mode user --user direkturcrypto --scrolls 2 --limit 20
+  2. node scripts/x-scroll.mjs --mode user --user itsjdraven --scrolls 2 --limit 20
+  3. node scripts/x-scroll.mjs --mode user --user pengsonal --scrolls 2 --limit 20
+  4. node scripts/x-scroll.mjs --mode search --query "(from:openai OR from:GoogleDeepMind OR from:AnthropicAI OR from:claudeai OR from:opencode OR from:GeminiApp) -filter:replies" --scrolls 2 --limit 30
+  5. node scripts/x-scroll.mjs --mode search --query "(AI meme OR tech meme OR meme indonesia OR shitpost indonesia) -filter:replies" --scrolls 2 --limit 25
+- Jalankan langsung dan baca stdout. JANGAN redirect output ke /tmp atau file lain. Jangan menjalankan lebih dari 5 perintah X.
+- Verifikasi klaim penting dengan webfetch/curl ke sumber primer (timeout 20s). Maksimal 4 link. Jangan membuat loop tanpa batas.
+- Total budget 12 menit. Kalau X error atau hasilnya sedikit, jujur sebutkan dan pakai berita AI terverifikasi dari sumber primer sebagai pengganti.
+
+YANG DICARI
+- 24 jam terakhir (48–72 jam hanya kalau masih segar).
+- AI: model/agent baru, rilis lab (OpenAI, Google/Gemini, Anthropic/Claude, opencode, dll), dev tools, open source, security/privacy, consumer tech.
+- Meme terbaru: global dan Indonesia, format/tren lucu yang sedang ramai — bukan cuma berita.
+- Minimal 12, maksimal 15 kandidat. Boleh lebih dari 10; jangan paksakan yang lemah.
+- Prioritaskan fakta spesifik dari post X asli. Skip politik, shilling harga crypto, engagement bait, dan topik basi.
+
+OUTPUT (Bahasa Indonesia, maks 1800 kata)
+1. Lima bullet: apa yang benar-benar ramai di X hari ini, dengan bukti.
+2. 12–15 kandidat bernomor. Tiap kandidat: [NEWS|MEME|AI|TOOL|QUESTION] · fakta inti 1 kalimat · sumber primer URL · bukti X URL + @author + waktu + metrik terlihat · angle/hook · kenapa sekarang. Untuk meme, jelaskan format/joke-nya, bukan cuma "viral".
+3. Rekomendasi 8 terbaik + komposisi (berapa news, meme, AI, question).
+4. Gap: apa yang tidak bisa diverifikasi.
+
+Gaya: Indonesia santai, to the point, boleh "gajelas"/absurd untuk meme, tapi fakta tetap benar. Jangan mengarang post, metrik, URL, atau tool use. Agent berikutnya menulis tweet final dari handoff ini.`;
+const dailyWriterPrompt = `Kamu adalah ghostwriter X. Ubah handoff riset menjadi 8 tweet siap publish + jadwal. Jangan riset ulang, jangan buka X, jangan browsing. Kalau director memberi "selected items"/approval note, PAKAI HANYA item yang dipilih. Kalau tidak ada, pilih 8 terbaik dari handoff.
+
+SKILLS
+- Baca dan terapkan .agents/skills/social-media-context-sms/SKILL.md, post-writer-sms, hook-writer-sms, platform-strategy-sms, dan content-pattern-analyzer-sms. Baca file yang relevan dengan tool read.
+
+BAHASA & VOICE
+- Bahasa Indonesia santai, to the point. Bukan bahasa brand, newsletter, atau korporat.
+- Satu ide per tweet, baris pendek. Tanpa "BREAKING", tanpa "Jadi gini...", tanpa hashtag kecuali benar-benar natural (default []).
+- Gaya "gajelas" boleh: absurd, dry, typo lucu, reaksi berlebihan — tapi tetap nyambung ke fakta dan tidak menyinggung.
+- Istilah teknis (LLM, GPU, open source) boleh tetap Inggris.
+- Hard limit 280 karakter per caption. Hitung sebelum return.
+- Emoji secukupnya (😭 👀 🔥), jangan ditumpuk.
+- Fakta hanya dari handoff. Jangan mengarang angka, kutipan, cerita pribadi, atau URL.
+
+MIX (tepat 8 post)
+- 3 berita/AI: fakta konkret + kenapa penting, bahasa manusia.
+- 2 meme/reaksi: energi shitpost dari meme asli (global atau Indonesia).
+- 1 pertanyaan/comparison singkat.
+- 1 list/retrospective.
+- 1 tool/discovery under-the-radar.
+Jangan jadikan semuanya news summary. Tidak boleh ada topik atau opener yang duplikat.
+
+JADWAL
+- Asia/Jakarta, tiap 2 jam: 07:00, 09:00, 11:00, 13:00, 15:00, 17:00, 19:00, 21:00.
+- Berita time-sensitive di pagi; meme/pertanyaan di slot engagement.
+
+OUTPUT
+Return ONLY valid JSON, no markdown, no commentary:
+{"posts":[{"time":"07:00","caption":"final tweet text","hashtags":[],"mediaType":"text"}]}
+Tepat 8 item. caption adalah teks final yang dipublish, bukan deskripsi. mediaType "text" kecuali handoff punya URL gambar/video asli. hashtags biasanya [].
+Sebelum return, cek: 8 item, JSON valid, tiap caption <=280 karakter, mix sesuai brief, tidak ada topik duplikat.`;
+
 export const workflowPresets: WorkflowPreset[] = [
   {
     id: 'social-daily',
     name: 'Daily social media posting',
-    description: 'Research today’s trends, then let Social Media build and submit today’s full posting schedule for your approval. Creative is optional.',
+    description: 'Riset tren, meme, dan update AI dari akun X pilihan, tunggu director memilih kandidat, lalu susun jadwal 8 tweet berbahasa Indonesia untuk approval.',
     steps: [
       {
-        ...base, key: 'research', name: 'Research today’s trends', employeeId: '',
-        instructions: 'Research today’s trending conversations for our audience on the selected platform. Use webfetch or the research tools available to you. Return a concise briefing: 5–8 trends, the evidence/source for each, and one content angle per trend. Never invent a trend or source.',
-        expectedOutput: 'A sourced trend briefing with content angles.', dependsOn: [],
+        ...base, key: 'research', name: 'Riset tren, meme & update AI', employeeId: '', requiresApproval: true,
+        instructions: dailyResearchPrompt,
+        expectedOutput: 'Handoff Bahasa Indonesia: 12–15 kandidat tweet bernomor dengan fakta, URL sumber, bukti X, angle, dan komposisi 8 terbaik.', dependsOn: [],
       },
       {
-        ...base, key: 'schedule', name: 'Build today’s posting schedule', employeeId: '', kind: 'social-plan', platform: 'x', expectedPosts: 5,
-        instructions: 'Act as the Social Media division. Using the research briefing, build today’s complete posting schedule: exact times, captions and hashtags. Do not request Creative assets; these are text posts unless an existing media URL is supplied. This step is sent to the director for approval, so include the real schedule in your JSON response.',
-        expectedOutput: 'A JSON posting schedule with times, captions and hashtags.', dependsOn: ['research'], requiresApproval: true,
+        ...base, key: 'schedule', name: 'Susun jadwal tweet', employeeId: '', kind: 'social-plan', platform: 'x', expectedPosts: 8,
+        instructions: dailyWriterPrompt,
+        expectedOutput: 'JSON valid: 8 caption final Bahasa Indonesia dengan jam HH:MM Asia/Jakarta.', dependsOn: ['research'], requiresApproval: true,
       },
     ],
   },

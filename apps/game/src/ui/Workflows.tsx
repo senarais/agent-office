@@ -31,8 +31,9 @@ function PlanPreview({ step }: { step: WorkflowStepRun }) {
 function RunCard({ run }: { run: WorkflowRun }) {
   const world = useGame(s => s.world!); const { run: act, busy } = useAction();
   const [revision, setRevision] = useState<Record<string, string>>({});
+  const [notes, setNotes] = useState<Record<string, string>>({});
   const active = ['queued', 'running', 'waiting_approval', 'revision'].includes(run.status);
-  const approve = (step: WorkflowStepRun) => void act(async () => { await api(`/workflows/runs/${run.id}/approve`, { stepRunId: step.id }); useGame.getState().toast(`Approved “${step.name}”.`); });
+  const approve = (step: WorkflowStepRun) => void act(async () => { await api(`/workflows/runs/${run.id}/approve`, { stepRunId: step.id, note: (notes[step.id] || '').trim() || undefined }); setNotes(current => ({ ...current, [step.id]: '' })); useGame.getState().toast(`Approved “${step.name}”.`); });
   const revise = (step: WorkflowStepRun) => void act(async () => { await api(`/workflows/runs/${run.id}/revise`, { stepRunId: step.id, instructions: revision[step.id] }); setRevision(current => ({ ...current, [step.id]: '' })); useGame.getState().toast('Revision requested.'); });
   return <article className="workflow-run">
     <header><div className="grow"><span className="eyebrow">WORKFLOW RUN · {new Date(run.scheduledAt).toLocaleString()}</span><h3>{run.workflowName} <span className={`tag ${statusTone(run.status)}`}>{run.status.replaceAll('_', ' ').toUpperCase()}</span></h3><p>{run.brief || 'No description.'}</p></div>{active && <PixelButton className="danger" disabled={busy} onClick={() => void act(() => api(`/workflows/runs/${run.id}/cancel`, {}))}>Cancel run</PixelButton>}</header>
@@ -46,7 +47,7 @@ function RunCard({ run }: { run: WorkflowRun }) {
         {step.error && <p className="inline-error">{step.error}</p>}
         {!!step.output && <details><summary>Report output</summary><pre className="document">{step.output}</pre></details>}
         <PlanPreview step={step} />
-        {canReview && <div className="workflow-approval"><PixelButton className="primary" disabled={busy} onClick={() => approve(step)}>Approve &amp; continue</PixelButton><PixelButton disabled={busy} onClick={() => useGame.getState().open('report', step.reportId!)}>Open report</PixelButton></div>}
+        {canReview && <div className="workflow-approval"><Field label={step.kind === 'social-plan' ? 'Final notes for the director (optional)' : 'Selected items / instructions for the next step (optional)'}><textarea rows={3} maxLength={10000} value={notes[step.id] || ''} onChange={event => setNotes(current => ({ ...current, [step.id]: event.target.value }))} placeholder={step.kind === 'social-plan' ? 'Contoh: ganti caption nomor 3, jadwal 07:00 jadi 08:00.' : 'Contoh: pakai kandidat 1, 3, 5, 7, 9, 10, 12, 14. Skip yang crypto.'} /></Field><PixelButton className="primary" disabled={busy} onClick={() => approve(step)}>Approve &amp; continue</PixelButton><PixelButton disabled={busy} onClick={() => useGame.getState().open('report', step.reportId!)}>Open report</PixelButton></div>}
         {canRevise && <form onSubmit={event => { event.preventDefault(); revise(step); }}><Field label={`Revision instructions for “${step.name}”`}><textarea required rows={2} maxLength={10000} value={revision[step.id] || ''} onChange={event => setRevision(current => ({ ...current, [step.id]: event.target.value }))} placeholder="Change the schedule, rewrite the captions, keep the same research." /></Field><div className="form-actions"><PixelButton disabled={busy || !(revision[step.id] || '').trim()}>Request revision</PixelButton>{step.reportId && <PixelButton type="button" onClick={() => useGame.getState().open('report', step.reportId!)}>Open report</PixelButton>}</div></form>}
       </section>;
     })}</div>

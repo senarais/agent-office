@@ -2,6 +2,8 @@
 import { chromium } from 'playwright';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readdirSync, unlinkSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 
 const args = process.argv.slice(2);
 const option = (name, fallback) => {
@@ -29,17 +31,46 @@ const target = mode === 'search'
   : mode === 'tweet' ? explicitUrl
   : 'https://x.com/home';
 
-const context = await chromium.launchPersistentContext(profile, {
-  headless: !flag('headed'),
-  executablePath: process.env.SOCIAL_BROWSER_EXECUTABLE || undefined,
-  viewport: { width: 1280, height: 900 },
-  locale: 'en-US',
-});
+function clearProfile() {
+  let busy = false;
+  try {
+    const pids = execFileSync('pgrep', ['-f', profile], { encoding: 'utf8' }).trim().split('\n').filter(Boolean).map(Number);
+    for (const pid of pids) {
+      if (pid === process.pid) continue;
+      let age = 0;
+      try { age = Number(execFileSync('ps', ['-o', 'etimes=', '-p', String(pid)], { encoding: 'utf8' }).trim()) || 0; } catch { /* gone */ }
+      if (age > 600) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } } else busy = true;
+    }
+  } catch { /* no matches */ }
+  if (!busy) try { for (const name of readdirSync(profile)) if (name.startsWith('Singleton')) unlinkSync(resolve(profile, name)); } catch { /* no profile yet */ }
+  return !busy;
+}
+async function launch() {
+  let lastError;
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    if (!clearProfile()) throw new Error('X browser profile is busy with another publish or scrape. Retry in a few minutes.');
+    try {
+      return await chromium.launchPersistentContext(profile, {
+        headless: !flag('headed'),
+        executablePath: process.env.SOCIAL_BROWSER_EXECUTABLE || undefined,
+        viewport: { width: 1280, height: 900 },
+        locale: 'en-US', chromiumSandbox: false, timeout: 180000,
+        args: ['--disable-dev-shm-usage', '--disable-gpu', '--blink-settings=imagesEnabled=false'],
+      });
+    } catch (error) {
+      lastError = error;
+      clearProfile();
+      if (attempt < 2) await new Promise(done => setTimeout(done, 3000));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('Browser launch failed.');
+}
+const context = await launch();
 let page = context.pages()[0] || await context.newPage();
 let code = 0;
 try {
-  await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 60000 });
-  await page.waitForSelector('article[data-testid="tweet"]', { timeout: 30000 }).catch(() => undefined);
+  await page.goto(target, { waitUntil: 'domcontentloaded', timeout: 120000 });
+  await page.waitForSelector('article[data-testid="tweet"]', { timeout: 90000 }).catch(() => undefined);
 
   if (!(await page.locator('[data-testid="SideNav_AccountSwitcher_Button"]').count())) {
     console.error('X profile is not signed in. Open the office Social panel and sign in to X once, then retry.');
@@ -77,7 +108,7 @@ try {
       for (const tweet of tweets) if (!collected.has(tweet.url)) collected.set(tweet.url, tweet);
     };
 
-    await page.waitForTimeout(5000);
+    await page.waitForTimeout(6000);
     await snapshot();
     for (let index = 0; index < scrolls && collected.size < limit; index++) {
       await page.mouse.wheel(0, 1800);
