@@ -39,7 +39,7 @@ function clearProfile() {
       if (pid === process.pid) continue;
       let age = 0;
       try { age = Number(execFileSync('ps', ['-o', 'etimes=', '-p', String(pid)], { encoding: 'utf8' }).trim()) || 0; } catch { /* gone */ }
-      if (age > 600) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } } else busy = true;
+      if (age > 900) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } } else busy = true;
     }
   } catch { /* no matches */ }
   if (!busy) try { for (const name of readdirSync(profile)) if (name.startsWith('Singleton')) unlinkSync(resolve(profile, name)); } catch { /* no profile yet */ }
