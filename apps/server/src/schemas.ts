@@ -40,7 +40,7 @@ export const workflowStepSchema = z.object({
   tools: z.array(z.string().max(30)).max(10).default([]),
   dependsOn: z.array(z.string().max(80)).max(12).default([]),
   requiresApproval: z.boolean().default(false),
-  kind: z.enum(['agent', 'social-plan']).default('agent'),
+  kind: z.enum(['agent', 'review', 'social-plan']).default('agent'),
   platform: z.enum(socialPlatforms).optional(),
   expectedPosts: z.number().int().min(1).max(12).default(3),
 });

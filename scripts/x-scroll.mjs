@@ -2,7 +2,7 @@
 import { chromium } from 'playwright';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readdirSync, unlinkSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 
 const args = process.argv.slice(2);
@@ -45,10 +45,33 @@ function clearProfile() {
   if (!busy) try { for (const name of readdirSync(profile)) if (name.startsWith('Singleton')) unlinkSync(resolve(profile, name)); } catch { /* no profile yet */ }
   return !busy;
 }
+const lockDir = resolve(dataDir, 'browser', 'x-scrape.lock');
+const sleep = ms => new Promise(done => setTimeout(done, ms));
+const alive = pid => { try { process.kill(pid, 0); return true; } catch (error) { return error?.code === 'EPERM'; } };
+async function acquireLock() {
+  const deadline = Date.now() + 240000;
+  mkdirSync(resolve(dataDir, 'browser'), { recursive: true, mode: 0o700 });
+  while (Date.now() < deadline) {
+    try { mkdirSync(lockDir); writeFileSync(resolve(lockDir, 'pid'), String(process.pid)); return; }
+    catch (error) {
+      if (error?.code !== 'EEXIST') throw error;
+      let owner = 0;
+      try { owner = Number(readFileSync(resolve(lockDir, 'pid'), 'utf8').trim()) || 0; } catch { /* being written */ }
+      if (!owner || !alive(owner)) { rmSync(lockDir, { recursive: true, force: true }); continue; }
+      await sleep(2000);
+    }
+  }
+  throw new Error('X scrape queue is busy after 4 minutes. Retry later.');
+}
+function releaseLock() {
+  try { if (Number(readFileSync(resolve(lockDir, 'pid'), 'utf8').trim()) === process.pid) rmSync(lockDir, { recursive: true, force: true }); } catch { /* gone */ }
+}
+await acquireLock();
+process.once('exit', releaseLock);
 async function launch() {
   let lastError;
   for (let attempt = 1; attempt <= 2; attempt++) {
-    if (!clearProfile()) throw new Error('X browser profile is busy with another publish or scrape. Retry in a few minutes.');
+    if (!clearProfile()) { await sleep(3000); if (!clearProfile()) throw new Error('X browser profile is busy with another publish. Retry in a few minutes.'); }
     try {
       return await chromium.launchPersistentContext(profile, {
         headless: !flag('headed'),

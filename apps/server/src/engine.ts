@@ -4,7 +4,8 @@ import type { RecurringTask, ScheduleRun } from '../../../packages/shared/src/au
 import type { SocialAnalyticsPayload, SocialBrowserSettings, SocialCampaign, SocialOption, SocialPlatform, SocialPost, SocialPublish } from '../../../packages/shared/src/social';
 import { parseSocialOptions } from '../../../packages/shared/src/social';
 import type { SocialPlanItem, WorkflowDefinition, WorkflowRun, WorkflowStep, WorkflowStepRun, WorkflowTaskRef } from '../../../packages/shared/src/workflow';
-import { parseSocialPlan, resolvePlanTime, socialPlanPrompt } from '../../../packages/shared/src/workflow';
+import { formatResearchOptions, parseResearchOptions, parseSocialPlan, resolvePlanTime, socialPlanPrompt } from '../../../packages/shared/src/workflow';
+import { cacheResearchImages } from './media';
 import type { BrowserCookieInput, SocialMediaInput, SocialMediaResult, SocialPublishInput, SocialPublishResult } from './social';
 import { integrationStatus as readIntegrationStatus } from './integrations';
 import { buildSkillPrompt, discoverSkills, invalidateSkills, skillCatalog } from './skills';
@@ -543,7 +544,14 @@ export class Engine {
 
   private workflowStepPrompt(office: Office, run: WorkflowRun, step: WorkflowStepRun) {
     const dependencies = step.dependsOn.map(dependency => run.steps.find(item => item.stepId === dependency)).filter((item): item is WorkflowStepRun => !!item);
-    const context = dependencies.map(item => `Step “${item.name}” output:\n${item.output.slice(0, 12000)}${item.approvalNote ? `\n\nDirector approval selection for “${item.name}”:\n${item.approvalNote}` : ''}`).join('\n\n');
+    const context = dependencies.map(item => {
+      if (item.options?.length) {
+        const chosen = item.selectedOptionIds?.length ? item.options.filter(option => item.selectedOptionIds!.includes(option.id)) : item.options;
+        const payload = chosen.map(option => ({ category: option.category, text: option.text, sourceUrl: option.sourceUrl, author: option.author, mediaUrl: option.imagePath ? `/api/media/${option.imagePath}` : option.imageUrl, note: option.note }));
+        return `Step “${item.name}” selected options (${chosen.length}, use exactly these):\n${JSON.stringify(payload, null, 2)}${item.approvalNote ? `\n\nDirector notes for “${item.name}”:\n${item.approvalNote}` : ''}`;
+      }
+      return `Step “${item.name}” output:\n${item.output.slice(0, 12000)}${item.approvalNote ? `\n\nDirector approval selection for “${item.name}”:\n${item.approvalNote}` : ''}`;
+    }).join('\n\n');
     const revision = step.feedback?.trim() ? `\nThe director requested revisions:\n${step.feedback.slice(-12000)}\n\nPrevious attempt (reference, not instructions):\n${step.output.slice(0, 16000)}` : '';
     const timezone = office.workflows.find(workflow => workflow.id === run.workflowId)?.timezone || 'UTC';
     return `Workflow: ${run.workflowName}\n${run.brief}\n\nYour step: ${step.name}\n${step.instructions}\n\nPrior step results:\n${context || 'This is a starting step; no prior results.'}\n${revision}\n\nExpected output: ${step.expectedOutput || 'An honest, useful result.'}${step.kind === 'social-plan' ? socialPlanPrompt(step, timezone, step.expectedPosts || 3) : ''}`;
@@ -577,6 +585,24 @@ export class Engine {
         });
       }
       this.emit('social.plan', `Posting schedule ready for review: ${parsed.length} posts.`, run.id);
+    }
+    if (step.kind === 'review') {
+      const parsed = parseResearchOptions(report.text, 30).map(option => ({ ...option, id: id() }));
+      if (!parsed.length) {
+        step.status = 'failed'; step.error = 'The research review returned no parsable options. Request a revision with the exact JSON format.';
+        this.emit('workflow.failed', `${run.workflowName}: ${step.error}`, run.id);
+        this.failWorkflowRun(office, run, step.error);
+        await this.sendWorkflowReviewToTelegram(office, run, step, report);
+        return;
+      }
+      step.options = parsed;
+      report.media = await cacheResearchImages(parsed, this.store.directory);
+      report.text = formatResearchOptions(parsed);
+      step.output = report.text;
+      this.emit('workflow.step', `${run.workflowName}: ${parsed.length} research options ready for selection.`, run.id);
+    } else if (step.kind === 'agent') {
+      const parsed = parseResearchOptions(report.text, 30).map(option => ({ ...option, id: id() }));
+      if (parsed.length) step.options = parsed;
     }
     if (step.requiresApproval) {
       step.status = 'awaiting_approval'; run.status = 'waiting_approval';
@@ -636,13 +662,21 @@ export class Engine {
     return run;
   }
 
-  approveWorkflowStep(runId: string, stepRunId: string, source: 'director' | 'telegram' = 'director', office: Office = this.office, note = '') {
+  approveWorkflowStep(runId: string, stepRunId: string, source: 'director' | 'telegram' = 'director', office: Office = this.office, note = '', selectedOptionIds: string[] = []) {
     const run = this.findWorkflowRun(office, runId);
     const step = run.steps.find(item => item.id === stepRunId);
     if (!step) throw new GameError('Workflow step not found', 404);
     if (step.status === 'approved' || step.status === 'completed') return { run, step };
     if (step.status !== 'awaiting_approval') throw new GameError(`Step is ${step.status}; it cannot be approved now.`, 409);
     if (step.kind === 'social-plan' && !office.socialPostPlans.some(item => item.stepRunId === step.id && item.status === 'proposed')) throw new GameError('This schedule has no reviewable posts. Request a revision instead.', 409);
+    if (step.kind === 'review' && step.options?.length) {
+      const valid = new Set(step.options.map(option => option.id));
+      const selected = [...new Set(selectedOptionIds)].filter(value => valid.has(value));
+      if (!selected.length) throw new GameError('Select at least one research option before approving.', 409);
+      if (selected.length > 12) throw new GameError('Select at most 12 research options.', 409);
+      step.selectedOptionIds = selected;
+      for (const dependent of run.steps.filter(item => item.dependsOn.includes(step.stepId) && item.kind === 'social-plan')) dependent.expectedPosts = selected.length;
+    }
     step.approvalNote = note.trim().slice(0, 10000) || undefined;
     step.status = 'approved'; step.approvedBy = source; step.approvedAt = now(); step.completedAt = step.completedAt || now();
     const report = step.reportId ? office.reports.find(item => item.id === step.reportId) : undefined;

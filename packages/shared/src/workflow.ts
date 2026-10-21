@@ -1,7 +1,7 @@
 import type { Schedule } from './automation';
 import type { SocialMediaType, SocialPlatform } from './social';
 
-export type WorkflowStepKind = 'agent' | 'social-plan';
+export type WorkflowStepKind = 'agent' | 'review' | 'social-plan';
 export type WorkflowRunStatus = 'queued' | 'running' | 'waiting_approval' | 'revision' | 'completed' | 'failed' | 'cancelled' | 'skipped';
 export type WorkflowStepStatus = 'pending' | 'queued' | 'running' | 'awaiting_approval' | 'revision' | 'approved' | 'completed' | 'failed' | 'skipped' | 'cancelled';
 export type SocialPlanStatus = 'proposed' | 'approved' | 'publishing' | 'published' | 'failed' | 'cancelled';
@@ -45,6 +45,17 @@ export interface WorkflowDefinition {
   deletedAt?: string;
 }
 
+export interface ResearchOption {
+  id: string;
+  category: string;
+  text: string;
+  sourceUrl?: string;
+  author?: string;
+  imageUrl?: string;
+  imagePath?: string;
+  note?: string;
+}
+
 export interface WorkflowStepRun {
   id: string;
   stepId: string;
@@ -65,6 +76,8 @@ export interface WorkflowStepRun {
   error?: string;
   feedback?: string;
   approvalNote?: string;
+  options?: ResearchOption[];
+  selectedOptionIds?: string[];
   revisionCount: number;
   approvedBy?: 'director' | 'telegram';
   approvedAt?: string;
@@ -109,6 +122,61 @@ export interface SocialPlanItem {
   nextRetryAt?: string;
   createdAt: string;
   publishedAt?: string;
+}
+
+const researchCategories = ['TECH', 'TRENDS', 'MEME'];
+
+/** Parse a research handoff into tweet-ready options. The agent must return JSON; prose is not an option. */
+export function parseResearchOptions(input: string, max = 30): ResearchOption[] {
+  const clean = input.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+  const parse = (value: string): unknown => { try { return JSON.parse(value); } catch { return undefined; } };
+  let value = parse(clean);
+  if (value === undefined) {
+    const start = clean.search(/[[{]/);
+    const end = Math.max(clean.lastIndexOf(']'), clean.lastIndexOf('}'));
+    if (start >= 0 && end > start) value = parse(clean.slice(start, end + 1));
+  }
+  if (value && typeof value === 'object' && !Array.isArray(value)) {
+    const wrapper = value as Record<string, unknown>;
+    value = Array.isArray(wrapper.options) ? wrapper.options
+      : Array.isArray(wrapper.items) ? wrapper.items
+        : Array.isArray(wrapper.research) ? wrapper.research
+          : [];
+  }
+  if (!Array.isArray(value)) return [];
+  const options: ResearchOption[] = [];
+  for (const raw of value.slice(0, max)) {
+    if (!raw || typeof raw !== 'object') continue;
+    const item = raw as Record<string, unknown>;
+    const body = text(item.text ?? item.caption ?? item.tweet ?? item.post, 600);
+    if (!body) continue;
+    const category = text(item.category ?? item.type ?? item.theme, 20).toUpperCase();
+    const imageRaw = item.imageUrl ?? item.image_url ?? item.image ?? item.media;
+    const image = Array.isArray(imageRaw) ? imageRaw.find(value => typeof value === 'string') : imageRaw;
+    const sourceUrl = text(item.sourceUrl ?? item.source_url ?? item.source ?? item.link, 1200);
+    const imageUrl = text(image, 1200);
+    options.push({
+      id: text(item.id, 80),
+      category: researchCategories.includes(category) ? category : 'TECH',
+      text: body,
+      sourceUrl: /^https?:\/\//i.test(sourceUrl) ? sourceUrl : undefined,
+      author: text(item.author ?? item.handle, 80) || undefined,
+      imageUrl: /^https?:\/\//i.test(imageUrl) ? imageUrl : undefined,
+      note: text(item.note ?? item.reason, 500) || undefined,
+    });
+  }
+  return options;
+}
+
+export function formatResearchOptions(options: ResearchOption[]) {
+  const order = [...researchCategories, ...[...new Set(options.map(option => option.category))].filter(category => !researchCategories.includes(category))];
+  const blocks: string[] = [];
+  for (const category of order) {
+    const items = options.filter(option => option.category === category);
+    if (!items.length) continue;
+    blocks.push([category, ...items.map((option, index) => `${index + 1}. ${option.text}`)].join('\n'));
+  }
+  return blocks.join('\n\n');
 }
 
 export interface ParsedSocialPlanItem {

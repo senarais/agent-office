@@ -61,7 +61,7 @@ export async function createApp(directory = process.env.DATA_DIR || '.local-data
   app.post('/api/workflows', req => engine.createWorkflow(req.body));
   app.put<{ Params: { id: string } }>('/api/workflows/:id', req => engine.updateWorkflow(req.params.id, req.body));
   app.post<{ Params: { id: string } }>('/api/workflows/:id/action', req => engine.workflowAction(req.params.id, z.object({ action: z.enum(['pause', 'resume', 'delete', 'run']) }).parse(req.body).action));
-  app.post<{ Params: { id: string } }>('/api/workflows/runs/:id/approve', req => { const b = z.object({ stepRunId: z.string().uuid(), note: z.string().trim().max(10000).optional() }).parse(req.body); return engine.approveWorkflowStep(req.params.id, b.stepRunId, 'director', engine.office, b.note || ''); });
+  app.post<{ Params: { id: string } }>('/api/workflows/runs/:id/approve', req => { const b = z.object({ stepRunId: z.string().uuid(), note: z.string().trim().max(10000).optional(), selectedOptionIds: z.array(z.string().uuid()).max(30).optional() }).parse(req.body); return engine.approveWorkflowStep(req.params.id, b.stepRunId, 'director', engine.office, b.note || '', b.selectedOptionIds || []); });
   app.post<{ Params: { id: string } }>('/api/workflows/runs/:id/revise', req => { const b = z.object({ stepRunId: z.string().uuid(), instructions: z.string().trim().min(1).max(10000) }).parse(req.body); return engine.reviseWorkflowStep(req.params.id, b.stepRunId, b.instructions); });
   app.post<{ Params: { id: string } }>('/api/workflows/runs/:id/cancel', req => engine.cancelWorkflowRun(req.params.id));
   app.post<{ Params: { id: string } }>('/api/social/plans/:id/action', req => engine.socialPlanAction(req.params.id, z.object({ action: z.enum(['retry', 'cancel']) }).parse(req.body).action));
@@ -96,11 +96,12 @@ export async function createApp(directory = process.env.DATA_DIR || '.local-data
   app.post('/api/skills/preview', req => skillPreview(z.object({ id: z.string().max(200) }).parse(req.body).id));
   app.post('/api/skills/refresh', () => ({ skills: engine.refreshSkills() }));
   app.get<{ Params: { file: string } }>('/api/media/:file', (req, reply) => {
-    if (!/^[a-f0-9-]+\.(png|jpe?g|webp|mp4)$/i.test(req.params.file)) throw new GameError('Media not found', 404);
+    if (!/^[a-f0-9-]+\.(png|jpe?g|webp|gif|avif|mp4)$/i.test(req.params.file)) throw new GameError('Media not found', 404);
     const path = join(directory, 'media', req.params.file);
     if (!existsSync(path)) throw new GameError('Media not found', 404);
     const extension = req.params.file.split('.').pop()!.toLowerCase();
-    return reply.type(extension === 'mp4' ? 'video/mp4' : `image/${extension === 'jpg' ? 'jpeg' : extension}`).send(readFileSync(path));
+    const type = extension === 'mp4' ? 'video/mp4' : `image/${extension === 'jpg' ? 'jpeg' : extension}`;
+    return reply.type(type).header('Cache-Control', 'public, max-age=31536000, immutable').send(readFileSync(path));
   });
   app.post('/api/meetings', req => { const b = z.object({ topic: z.string().min(1).max(4000), attendeeIds: z.array(z.string().uuid()).min(1).max(6) }).parse(req.body); return engine.meeting(b.topic, b.attendeeIds); });
   app.post<{ Params: { id: string } }>('/api/meetings/:id/cancel', req => { engine.cancelMeeting(req.params.id); return { ok: true }; });

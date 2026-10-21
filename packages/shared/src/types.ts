@@ -36,10 +36,12 @@ export interface Task {
 export interface Usage { inputTokens?: number; outputTokens?: number; totalTokens?: number; cost?: number }
 export interface Message { id: string; conversationId: string; role: 'user' | 'assistant'; text: string; createdAt: string; status: 'complete' | 'streaming' | 'error' | 'cancelled'; error?: string; usage?: Usage }
 export interface Conversation { id: string; employeeId: string; createdAt: string; sessionId?: string }
+export interface ReportMedia { url: string; path?: string; alt?: string }
 export interface Report {
   id: string; taskId: string; employeeId: string; title: string; text: string; createdAt: string;
   approved: boolean; delivered: boolean; archived?: boolean; outputDestination?: 'printer' | 'laptop' | 'both';
   telegramStatus?: 'sent' | 'failed' | 'not-configured'; telegramSentAt?: string; telegramError?: string;
+  media?: ReportMedia[];
   workflow?: WorkflowTaskRef;
 }
 export interface Meeting { id: string; topic: string; attendeeIds: string[]; status: 'gathering' | 'running' | 'completed' | 'failed' | 'cancelled'; messages: { employeeId: string; text: string }[]; summary: string; decisions: string[]; actions: { employeeId: string; title: string; taskId?: string }[]; error?: string; createdAt: string }

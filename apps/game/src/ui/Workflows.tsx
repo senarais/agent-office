@@ -28,12 +28,37 @@ function PlanPreview({ step }: { step: WorkflowStepRun }) {
   return <div className="workflow-plan"><h4>Posting schedule</h4><SocialPlanList stepRunId={step.id} actions={false} /></div>;
 }
 
+const categoryOrder = ['TECH', 'TRENDS', 'MEME'];
+const categoriesOf = (step: WorkflowStepRun) => [...new Set((step.options || []).map(option => option.category))].sort((a, b) => {
+  const left = categoryOrder.indexOf(a); const right = categoryOrder.indexOf(b);
+  return (left < 0 ? 99 : left) - (right < 0 ? 99 : right);
+});
+
+function ResearchOptions({ step, chosen, onChange }: { step: WorkflowStepRun; chosen: string[]; onChange: (ids: string[]) => void }) {
+  const options = step.options || [];
+  const toggle = (optionId: string) => onChange(chosen.includes(optionId) ? chosen.filter(id => id !== optionId) : [...chosen, optionId]);
+  return <fieldset className="research-options">
+    <legend>Pilih tweet untuk dijadwalkan · {chosen.length}/12</legend>
+    <div className="research-actions"><PixelButton type="button" onClick={() => onChange(options.slice(0, 12).map(option => option.id))}>Pilih 12 pertama</PixelButton><PixelButton type="button" onClick={() => onChange([])}>Kosongkan</PixelButton></div>
+    {categoriesOf(step).map(category => {
+      const items = options.filter(option => option.category === category);
+      return <div className="research-group" key={category}><h5>{category}</h5>{items.map((option, index) => <label className={`research-option ${chosen.includes(option.id) ? 'chosen' : ''}`} key={option.id}>
+        <input type="checkbox" checked={chosen.includes(option.id)} onChange={() => toggle(option.id)} />
+        {option.imagePath ? <img src={`/api/media/${option.imagePath}`} alt="" loading="lazy" /> : <span className="research-noimage">NO IMG</span>}
+        <span className="research-copy"><b>{category} #{index + 1}</b><span>{option.text}</span>{option.author && <small>{option.author}</small>}{option.sourceUrl && <a href={option.sourceUrl} target="_blank" rel="noreferrer" onClick={event => event.stopPropagation()}>source ↗</a>}</span>
+      </label>)}</div>;
+    })}
+  </fieldset>;
+}
+
 function RunCard({ run }: { run: WorkflowRun }) {
   const world = useGame(s => s.world!); const { run: act, busy } = useAction();
   const [revision, setRevision] = useState<Record<string, string>>({});
   const [notes, setNotes] = useState<Record<string, string>>({});
+  const [selected, setSelected] = useState<Record<string, string[]>>({});
   const active = ['queued', 'running', 'waiting_approval', 'revision'].includes(run.status);
-  const approve = (step: WorkflowStepRun) => void act(async () => { await api(`/workflows/runs/${run.id}/approve`, { stepRunId: step.id, note: (notes[step.id] || '').trim() || undefined }); setNotes(current => ({ ...current, [step.id]: '' })); useGame.getState().toast(`Approved “${step.name}”.`); });
+  const chosenFor = (step: WorkflowStepRun) => selected[step.id] ?? (step.options || []).slice(0, 8).map(option => option.id);
+  const approve = (step: WorkflowStepRun) => void act(async () => { await api(`/workflows/runs/${run.id}/approve`, { stepRunId: step.id, note: (notes[step.id] || '').trim() || undefined, selectedOptionIds: step.options?.length ? chosenFor(step) : undefined }); setNotes(current => ({ ...current, [step.id]: '' })); useGame.getState().toast(`Approved “${step.name}”.`); });
   const revise = (step: WorkflowStepRun) => void act(async () => { await api(`/workflows/runs/${run.id}/revise`, { stepRunId: step.id, instructions: revision[step.id] }); setRevision(current => ({ ...current, [step.id]: '' })); useGame.getState().toast('Revision requested.'); });
   return <article className="workflow-run">
     <header><div className="grow"><span className="eyebrow">WORKFLOW RUN · {new Date(run.scheduledAt).toLocaleString()}</span><h3>{run.workflowName} <span className={`tag ${statusTone(run.status)}`}>{run.status.replaceAll('_', ' ').toUpperCase()}</span></h3><p>{run.brief || 'No description.'}</p></div>{active && <PixelButton className="danger" disabled={busy} onClick={() => void act(() => api(`/workflows/runs/${run.id}/cancel`, {}))}>Cancel run</PixelButton>}</header>
@@ -42,12 +67,14 @@ function RunCard({ run }: { run: WorkflowRun }) {
       const employee = world.employees.find(item => item.id === step.employeeId);
       const canReview = step.status === 'awaiting_approval';
       const canRevise = step.status === 'awaiting_approval' || (run.status === 'failed' && step.status === 'failed');
+      const chosen = chosenFor(step);
       return <section className={`workflow-step ${canReview ? 'awaiting' : ''}`} key={step.id}>
-        <div className="workflow-step-head"><span className="step-number">{index + 1}</span><div className="grow"><b>{step.name}</b><small>{employee?.name || 'Missing employee'} · {step.kind === 'social-plan' ? `social plan · ${step.expectedPosts || 3} posts` : 'agent step'}</small></div><span className={`tag ${statusTone(step.status)}`}>{step.status.replaceAll('_', ' ').toUpperCase()}</span></div>
+        <div className="workflow-step-head"><span className="step-number">{index + 1}</span><div className="grow"><b>{step.name}</b><small>{employee?.name || 'Missing employee'} · {step.kind === 'social-plan' ? `social plan · ${step.expectedPosts || 3} posts` : step.kind === 'review' ? `review · ${step.options?.length || 0} options` : 'agent step'}</small></div><span className={`tag ${statusTone(step.status)}`}>{step.status.replaceAll('_', ' ').toUpperCase()}</span></div>
         {step.error && <p className="inline-error">{step.error}</p>}
         {!!step.output && <details><summary>Report output</summary><pre className="document">{step.output}</pre></details>}
         <PlanPreview step={step} />
-        {canReview && <div className="workflow-approval"><Field label={step.kind === 'social-plan' ? 'Final notes for the director (optional)' : 'Selected items / instructions for the next step (optional)'}><textarea rows={3} maxLength={10000} value={notes[step.id] || ''} onChange={event => setNotes(current => ({ ...current, [step.id]: event.target.value }))} placeholder={step.kind === 'social-plan' ? 'Contoh: ganti caption nomor 3, jadwal 07:00 jadi 08:00.' : 'Contoh: pakai kandidat 1, 3, 5, 7, 9, 10, 12, 14. Skip yang crypto.'} /></Field><PixelButton className="primary" disabled={busy} onClick={() => approve(step)}>Approve &amp; continue</PixelButton><PixelButton disabled={busy} onClick={() => useGame.getState().open('report', step.reportId!)}>Open report</PixelButton></div>}
+        {canReview && step.options?.length ? <ResearchOptions step={step} chosen={chosen} onChange={ids => setSelected(current => ({ ...current, [step.id]: ids }))} /> : null}
+        {canReview && <div className="workflow-approval"><Field label={step.kind === 'social-plan' ? 'Final notes for the director (optional)' : 'Catatan tambahan untuk step berikutnya (optional)'}><textarea rows={3} maxLength={10000} value={notes[step.id] || ''} onChange={event => setNotes(current => ({ ...current, [step.id]: event.target.value }))} placeholder={step.kind === 'social-plan' ? 'Contoh: ganti caption nomor 3, jadwal 07:00 jadi 08:00.' : 'Contoh: prioritaskan yang lucu, hindari politik.'} /></Field><PixelButton className="primary" disabled={busy || (!!step.options?.length && (chosen.length < 1 || chosen.length > 12))} onClick={() => approve(step)}>Approve &amp; continue</PixelButton><PixelButton disabled={busy} onClick={() => useGame.getState().open('report', step.reportId!)}>Open report</PixelButton></div>}
         {canRevise && <form onSubmit={event => { event.preventDefault(); revise(step); }}><Field label={`Revision instructions for “${step.name}”`}><textarea required rows={2} maxLength={10000} value={revision[step.id] || ''} onChange={event => setRevision(current => ({ ...current, [step.id]: event.target.value }))} placeholder="Change the schedule, rewrite the captions, keep the same research." /></Field><div className="form-actions"><PixelButton disabled={busy || !(revision[step.id] || '').trim()}>Request revision</PixelButton>{step.reportId && <PixelButton type="button" onClick={() => useGame.getState().open('report', step.reportId!)}>Open report</PixelButton>}</div></form>}
       </section>;
     })}</div>
@@ -138,7 +165,7 @@ export function WorkflowEditor({ editId }: { editId?: string }) {
     {!form.steps.length && <p className="note">No steps yet. Load a preset above or add a step manually.</p>}
     {form.steps.map((step, index) => <article className="workflow-step editor-step" key={step.id}>
       <div className="workflow-step-head"><span className="step-number">{index + 1}</span><div className="grow"><b>{step.name || 'Untitled step'}</b><small>{active.find(employee => employee.id === step.employeeId)?.name || 'Choose an employee'}</small></div><PixelButton type="button" className="danger" onClick={() => removeStep(index)}>Remove</PixelButton></div>
-      <div className="form-grid"><Field label="Step name"><input required maxLength={140} value={step.name} onChange={event => updateStep(index, { name: event.target.value })} /></Field><Field label="Assigned employee"><select required value={step.employeeId} onChange={event => updateStep(index, { employeeId: event.target.value, tools: [] })}><option value="">Choose employee</option>{active.map(employee => <option key={employee.id} value={employee.id}>{employee.name} · {employee.role} · {employee.department}</option>)}</select></Field><Field label="Step type"><select value={step.kind} onChange={event => updateStep(index, { kind: event.target.value as WorkflowStep['kind'] })}><option value="agent">Agent step</option><option value="social-plan">Social posting schedule</option></select></Field>{step.kind === 'social-plan' && <><Field label="Platform"><select value={step.platform || 'x'} onChange={event => updateStep(index, { platform: event.target.value as WorkflowStep['platform'] })}>{socialPlatforms.filter(platform => ['x', 'instagram'].includes(platform)).map(platform => <option key={platform} value={platform}>{platform.toUpperCase()}</option>)}</select></Field><Field label="Expected posts"><input type="number" min="1" max="12" value={step.expectedPosts || 3} onChange={event => updateStep(index, { expectedPosts: Number(event.target.value) })} /></Field></>}</div>
+      <div className="form-grid"><Field label="Step name"><input required maxLength={140} value={step.name} onChange={event => updateStep(index, { name: event.target.value })} /></Field><Field label="Assigned employee"><select required value={step.employeeId} onChange={event => updateStep(index, { employeeId: event.target.value, tools: [] })}><option value="">Choose employee</option>{active.map(employee => <option key={employee.id} value={employee.id}>{employee.name} · {employee.role} · {employee.department}</option>)}</select></Field><Field label="Step type"><select value={step.kind} onChange={event => updateStep(index, { kind: event.target.value as WorkflowStep['kind'] })}><option value="agent">Agent step</option><option value="review">Research review &amp; selection</option><option value="social-plan">Social posting schedule</option></select></Field>{step.kind === 'social-plan' && <><Field label="Platform"><select value={step.platform || 'x'} onChange={event => updateStep(index, { platform: event.target.value as WorkflowStep['platform'] })}>{socialPlatforms.filter(platform => ['x', 'instagram'].includes(platform)).map(platform => <option key={platform} value={platform}>{platform.toUpperCase()}</option>)}</select></Field><Field label="Expected posts"><input type="number" min="1" max="12" value={step.expectedPosts || 3} onChange={event => updateStep(index, { expectedPosts: Number(event.target.value) })} /></Field></>}</div>
       <Field label="Step instructions"><textarea required rows={3} maxLength={30000} value={step.instructions} onChange={event => updateStep(index, { instructions: event.target.value })} placeholder="What should this employee do, and what must they hand to the next step?" /></Field>
       <Field label="Expected output"><input maxLength={3000} value={step.expectedOutput} onChange={event => updateStep(index, { expectedOutput: event.target.value })} /></Field>
       <div className="check-grid"><label><input type="checkbox" checked={step.requiresApproval} onChange={event => updateStep(index, { requiresApproval: event.target.checked })} /> Pause for my approval after this step</label></div>

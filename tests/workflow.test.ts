@@ -8,7 +8,7 @@ import type { SocialBridge } from '../apps/server/src/engine';
 import { Store } from '../apps/server/src/database';
 import { defaultAppearance, defaultSettings } from '../packages/shared/src/types';
 import type { Report } from '../packages/shared/src/types';
-import { instantiatePreset, parseSocialPlan, resolvePlanTime } from '../packages/shared/src/workflow';
+import { formatResearchOptions, instantiatePreset, parseResearchOptions, parseSocialPlan, resolvePlanTime } from '../packages/shared/src/workflow';
 import type { SocialAnalyticsPayload, SocialBrowserSettings } from '../packages/shared/src/social';
 import type { SocialPublishInput } from '../apps/server/src/social';
 
@@ -284,4 +284,53 @@ test('scheduled publishing fails honestly when the browser bridge is unavailable
   assert.match(f.engine.s.socialPostPlans[0].error || '', /Playwright/);
   assert.equal(f.engine.s.socialPosts.length, 0);
   assert.equal(f.engine.s.settings.telegramReports, defaultSettings.telegramReports);
+});
+
+
+test('research options parse from fenced agent JSON and ignore unsafe media', () => {
+  const text = '```json\n' + JSON.stringify({ options: [
+    { category: 'tech', text: 'AI tool baru buat bikin video.', author: '@someone', imageUrl: 'https://pbs.twimg.com/media/abc.jpg', sourceUrl: 'https://x.com/someone/status/1' },
+    { category: 'meme', text: 'Ketika deploy Jumat sore.', image: 'javascript:alert(1)', source: 'not-a-url' },
+    { category: 'unknown', text: '  ', imageUrl: 'https://x.com/broken' },
+  ] }) + '\n```';
+  const options = parseResearchOptions(text);
+  assert.equal(options.length, 2);
+  assert.deepEqual(options.map(option => option.category), ['TECH', 'MEME']);
+  assert.equal(options[0].imageUrl, 'https://pbs.twimg.com/media/abc.jpg');
+  assert.equal(options[0].sourceUrl, 'https://x.com/someone/status/1');
+  assert.equal(options[1].imageUrl, undefined);
+  assert.equal(options[1].sourceUrl, undefined);
+  assert.equal(formatResearchOptions(options), 'TECH\n1. AI tool baru buat bikin video.\n\nMEME\n1. Ketika deploy Jumat sore.');
+});
+
+test('review step requires a real selection and honours only valid option ids', async t => {
+  const f = fixture(t), p = await f.engine.configureProvider({ name: 'Review fixture', kind: 'generic', baseUrl: 'http://127.0.0.1:1/v1', model: 'review-test' });
+  const reviewer = f.engine.hire({ ...profile, providerId: p.id, model: 'review-test' });
+  f.engine.providerFactory = () => ({
+    listModels: async () => ['review-test'],
+    execute: async request => {
+      const text = JSON.stringify({ options: [
+        { category: 'TECH', text: 'Tweet tech satu.', imageUrl: 'https://127.0.0.1/private.jpg' },
+        { category: 'TRENDS', text: 'Tweet tren dua.' },
+        { category: 'MEME', text: 'Tweet meme tiga.' },
+      ] });
+      request.onText(text); return { text };
+    },
+  });
+  const workflow = f.engine.createWorkflow({
+    name: 'Research merge', description: 'Merge and select.', timezone: 'UTC', schedule: null, enabled: true,
+    steps: [{ id: 'review', name: 'Merge research', employeeId: reviewer.id, instructions: 'Return research JSON.', expectedOutput: 'Options.', dependsOn: [], requiresApproval: true, kind: 'review', tools: [] }],
+  });
+  const run = f.engine.workflowAction(workflow.id, 'run')!;
+  await advanceUntil(f.engine, () => run.steps[0].status === 'awaiting_approval');
+  const step = run.steps[0];
+  assert.equal(step.options?.length, 3);
+  assert.equal(step.reportId ? f.engine.s.reports.find(report => report.id === step.reportId)?.media?.length : -1, 0);
+  assert.match(f.engine.s.reports.find(report => report.id === step.reportId)!.text, /^TECH\n1\. Tweet tech satu\./);
+  assert.throws(() => f.engine.approveWorkflowStep(run.id, step.id, 'director', f.engine.office, '', ['not-a-real-id']), /Select at least one/);
+  const chosen = [step.options![0].id, step.options![2].id];
+  f.engine.approveWorkflowStep(run.id, step.id, 'director', f.engine.office, 'Keep the funny one.', chosen);
+  assert.deepEqual(step.selectedOptionIds, chosen);
+  assert.equal(step.status, 'approved');
+  assert.equal(run.status, 'completed');
 });

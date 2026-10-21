@@ -2,6 +2,8 @@ import type { Engine } from './engine';
 import type { Office, Report } from '../../../packages/shared/src/types';
 import type { SocialCampaign, SocialPublish } from '../../../packages/shared/src/social';
 import type { SocialPlanItem, WorkflowRun, WorkflowStepRun } from '../../../packages/shared/src/workflow';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { telegramChatIds, telegramConfigured } from './integrations';
 import { safeError } from './providers';
 
@@ -64,15 +66,53 @@ export class TelegramService {
     }
   }
   private async api<T = unknown>(method: string, payload?: Record<string, unknown>, signal?: AbortSignal): Promise<T> {
-    const token = process.env.TELEGRAM_BOT_TOKEN;
-    if (!token) throw new Error('TELEGRAM_BOT_TOKEN is not configured.');
-    const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+    const response = await fetch(this.endpoint(method), {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload || {}),
       signal: signal || AbortSignal.timeout(30000),
     });
+    return this.parse<T>(method, response);
+  }
+  private endpoint(method: string) {
+    const token = process.env.TELEGRAM_BOT_TOKEN;
+    if (!token) throw new Error('TELEGRAM_BOT_TOKEN is not configured.');
+    return `https://api.telegram.org/bot${token}/${method}`;
+  }
+  private async parse<T>(method: string, response: Response): Promise<T> {
     const data = await response.json().catch(() => ({ ok: false, description: `HTTP ${response.status}` })) as TelegramResponse & { result?: T };
     if (!response.ok || !data.ok) throw new Error(`Telegram ${method}: ${data.description || `HTTP ${response.status}`}`);
     return data.result as T;
+  }
+  private async apiForm<T = unknown>(method: string, form: FormData): Promise<T> {
+    const response = await fetch(this.endpoint(method), { method: 'POST', body: form, signal: AbortSignal.timeout(60000) });
+    return this.parse<T>(method, response);
+  }
+  private async sendResearchAlbums(step: WorkflowStepRun) {
+    const directory = process.env.DATA_DIR || '.local-data';
+    const options = step.options || [];
+    for (const chat of telegramChatIds()) {
+      const categories = [...new Set(options.map(option => option.category))];
+      for (const category of categories) {
+        const items = options.filter(option => option.category === category && option.imagePath);
+        if (!items.length) continue;
+        for (let offset = 0; offset < items.length; offset += 10) {
+          const batch = items.slice(offset, offset + 10);
+          const media: { type: 'photo'; media: string; caption?: string }[] = [];
+          const form = new FormData();
+          form.append('chat_id', chat);
+          batch.forEach((option, position) => {
+            if (!option.imagePath) return;
+            const name = `file${position}`;
+            const type = option.imagePath.endsWith('.png') ? 'image/png' : option.imagePath.endsWith('.webp') ? 'image/webp' : option.imagePath.endsWith('.gif') ? 'image/gif' : 'image/jpeg';
+            form.append(name, new Blob([readFileSync(join(directory, 'media', option.imagePath))], { type }), option.imagePath);
+            const index = options.filter(item => item.category === category).findIndex(item => item.id === option.id) + offset + 1;
+            media.push({ type: 'photo', media: `attach://${name}`, caption: `${category} #${index}`.slice(0, 1024) });
+          });
+          if (!media.length) continue;
+          form.append('media', JSON.stringify(media));
+          await this.apiForm('sendMediaGroup', form);
+        }
+      }
+    }
   }
 
   async sendText(text: string, chatId?: string) {
@@ -130,6 +170,18 @@ export class TelegramService {
     const failed = step.status === 'failed';
     const revisionAllowed = approval || failed;
     const timeZone = office.workflows.find(item => item.id === run.workflowId)?.timezone || 'UTC';
+
+    if (approval && step.options?.length) {
+      const employee = office.employees.find(item => item.id === step.employeeId)?.name || 'Employee';
+      const body = `🧠 RESEARCH OPTIONS · ${office.name}\n${run.workflowName} · ${step.options.length} pilihan · ${employee}\nPilih di app, lalu Approve.\n\n${report.text}`;
+      for (const chat of telegramChatIds()) for (const part of chunks(body)) await this.api('sendMessage', { chat_id: chat, text: part, disable_web_page_preview: true });
+      await this.sendResearchAlbums(step);
+      for (const chat of telegramChatIds()) await this.api('sendMessage', {
+        chat_id: chat, text: 'Pilih item di office app, lalu Approve atau minta revisi.',
+        reply_markup: { inline_keyboard: [[{ text: '✅ Approve', callback_data: `ra:${report.id}` }, { text: '✏️ Request revision', callback_data: `rr:${report.id}` }]] },
+      });
+      return;
+    }
 
     if (plan.length) {
       const title = approval ? '🗓️ SCHEDULE REVIEW' : failed ? '⚠️ SCHEDULE FAILED' : '✅ SCHEDULED';
