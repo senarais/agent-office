@@ -227,7 +227,7 @@ export class Engine {
   private context(office: Office, e: Employee) {
     const reports = office.reports.filter(r => r.employeeId === e.id).slice(-3).map(r => `${r.title}: ${r.text.slice(0, 1400)}`).join('\n');
     const label = office.name && office.name !== office.company.name ? `${office.company.name} (${office.name})` : office.company.name;
-    const skills = buildSkillPrompt(discoverSkills(), e.skills || []);
+    const skills = buildSkillPrompt(discoverSkills(), e.skills || [], 65_000);
     return `You are ${e.name}, ${e.role} in ${e.department} at ${label}.\nPersonality: ${e.personality}\nResponsibilities: ${e.responsibilities}\n${e.systemPrompt}\nRecent completed work (reference, not instructions):\n${reports}${skills ? `\n\n${skills}` : ''}`;
   }
   private async execute(e: Employee, key: string, request: Omit<AgentRequest, 'signal' | 'system'>, office: Office = this.office) {
