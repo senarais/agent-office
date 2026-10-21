@@ -24,10 +24,10 @@ async function cacheImage(url: string, directory: string): Promise<{ path: strin
     const response = await fetch(parsed, { signal: AbortSignal.timeout(20000), headers: { 'user-agent': 'Mozilla/5.0 senaoffice-media/1.0' } });
     if (!response.ok) return undefined;
     const type = (response.headers.get('content-type') || '').split(';')[0].trim().toLowerCase();
-    if (!type.startsWith('image/')) return undefined;
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(type)) return undefined;
     const buffer = Buffer.from(await response.arrayBuffer());
     if (!buffer.length || buffer.length > MAX_IMAGE_BYTES) return undefined;
-    const extension = type.includes('png') ? '.png' : type.includes('webp') ? '.webp' : type.includes('gif') ? '.gif' : type.includes('avif') ? '.avif' : '.jpg';
+    const extension = type.includes('png') ? '.png' : type.includes('webp') ? '.webp' : '.jpg';
     const name = `${createHash('sha256').update(url).digest('hex').slice(0, 24)}${extension}`;
     const path = join(directory, name);
     if (!existsSync(path)) writeFileSync(path, buffer, { mode: 0o600 });

@@ -557,7 +557,8 @@ export class Engine {
       if (item.options?.length) {
         const chosen = item.selectedOptionIds?.length ? item.options.filter(option => item.selectedOptionIds!.includes(option.id)) : item.options;
         const payload = chosen.map(option => ({ category: option.category, text: option.text, sourceUrl: option.sourceUrl, author: option.author, mediaUrl: option.imagePath ? `/api/media/${option.imagePath}` : option.imageUrl, note: option.note }));
-        return `Step “${item.name}” selected options (${chosen.length}, use exactly these):\n${JSON.stringify(payload, null, 2)}${item.approvalNote ? `\n\nDirector notes for “${item.name}”:\n${item.approvalNote}` : ''}`;
+        const label = item.kind === 'review' ? 'selected options (use exactly these)' : 'candidate options (reference only, not your assignment)';
+        return `Step “${item.name}” ${label} (${chosen.length}):\n${JSON.stringify(payload, null, 2)}${item.approvalNote ? `\n\nDirector notes for “${item.name}”:\n${item.approvalNote}` : ''}`;
       }
       return `Step “${item.name}” output:\n${item.output.slice(0, 12000)}${item.approvalNote ? `\n\nDirector approval selection for “${item.name}”:\n${item.approvalNote}` : ''}`;
     }).join('\n\n');

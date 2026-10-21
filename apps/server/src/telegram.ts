@@ -92,24 +92,50 @@ export class TelegramService {
     for (const chat of telegramChatIds()) {
       const categories = [...new Set(options.map(option => option.category))];
       for (const category of categories) {
-        const items = options.filter(option => option.category === category && option.imagePath);
-        if (!items.length) continue;
+        const items = options.filter(option => option.category === category && (option.imagePath || option.imageUrl));
         for (let offset = 0; offset < items.length; offset += 10) {
           const batch = items.slice(offset, offset + 10);
           const media: { type: 'photo'; media: string; caption?: string }[] = [];
           const form = new FormData();
           form.append('chat_id', chat);
           batch.forEach((option, position) => {
-            if (!option.imagePath) return;
-            const name = `file${position}`;
-            const type = option.imagePath.endsWith('.png') ? 'image/png' : option.imagePath.endsWith('.webp') ? 'image/webp' : option.imagePath.endsWith('.gif') ? 'image/gif' : 'image/jpeg';
-            form.append(name, new Blob([readFileSync(join(directory, 'media', option.imagePath))], { type }), option.imagePath);
             const index = options.filter(item => item.category === category).findIndex(item => item.id === option.id) + offset + 1;
-            media.push({ type: 'photo', media: `attach://${name}`, caption: `${category} #${index}`.slice(0, 1024) });
+            const caption = `${category} #${index}`.slice(0, 1024);
+            if (option.imagePath) {
+              try {
+                const type = option.imagePath.endsWith('.png') ? 'image/png' : option.imagePath.endsWith('.webp') ? 'image/webp' : 'image/jpeg';
+                const name = `file${position}`;
+                form.append(name, new Blob([readFileSync(join(directory, 'media', option.imagePath))], { type }), option.imagePath);
+                media.push({ type: 'photo', media: `attach://${name}`, caption });
+                return;
+              } catch { /* fall back to the remote URL */ }
+            }
+            if (option.imageUrl) media.push({ type: 'photo', media: option.imageUrl, caption });
           });
           if (!media.length) continue;
+          if (media.length === 1) {
+            const single = new FormData();
+            single.append('chat_id', chat);
+            single.append('caption', media[0].caption || '');
+            const attached = /^attach:\/\/(.+)$/.exec(media[0].media)?.[1];
+            if (attached) single.append('photo', form.get(attached) as Blob, attached);
+            else single.append('photo', media[0].media);
+            await this.apiForm('sendPhoto', single);
+            continue;
+          }
           form.append('media', JSON.stringify(media));
-          await this.apiForm('sendMediaGroup', form);
+          try { await this.apiForm('sendMediaGroup', form); }
+          catch {
+            for (const item of media) {
+              const attached = /^attach:\/\/(.+)$/.exec(item.media)?.[1];
+              const fallback = new FormData();
+              fallback.append('chat_id', chat);
+              fallback.append('caption', item.caption || '');
+              if (attached) fallback.append('photo', form.get(attached) as Blob, attached);
+              else fallback.append('photo', item.media);
+              await this.apiForm('sendPhoto', fallback);
+            }
+          }
         }
       }
     }
