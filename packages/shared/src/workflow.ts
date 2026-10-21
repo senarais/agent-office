@@ -105,6 +105,7 @@ export interface SocialPlanItem {
   url?: string;
   error?: string;
   attempts: number;
+  nextRetryAt?: string;
   createdAt: string;
   publishedAt?: string;
 }

@@ -231,10 +231,25 @@ export class Engine {
     return `You are ${e.name}, ${e.role} in ${e.department} at ${label}.\nPersonality: ${e.personality}\nResponsibilities: ${e.responsibilities}\n${e.systemPrompt}\nRecent completed work (reference, not instructions):\n${reports}${skills ? `\n\n${skills}` : ''}`;
   }
   private async execute(e: Employee, key: string, request: Omit<AgentRequest, 'signal' | 'system'>, office: Office = this.office) {
-    this.employeeIn(office, e.id); const provider = this.adapter(e); const controller = new AbortController();
+    this.employeeIn(office, e.id); const provider = this.adapter(e); const controller = new AbortController(); let sessionId = request.sessionId;
     this.running.set(key, { employeeId: e.id, providerId: e.providerId, controller }); const timeout = setTimeout(() => controller.abort(new Error('Agent timeout after 10 minutes')), 600000);
-    try { const result = await provider.execute({ ...request, signal: controller.signal, system: this.context(office, e) }); controller.signal.throwIfAborted(); this.employeeIn(office, e.id); return result; }
-    finally { clearTimeout(timeout); if (this.running.get(key)?.controller === controller) this.running.delete(key); }
+    try {
+      for (let attempt = 1; ; attempt++) {
+        try {
+          const retryMessages = attempt > 1 && sessionId ? [...request.messages.slice(0, -1), { role: 'user' as const, content: 'Continue the task from where you stopped. Finish it and reply with the final result.' }] : request.messages;
+          const result = await provider.execute({ ...request, messages: retryMessages, sessionId, signal: controller.signal, system: this.context(office, e), onSession: sid => { sessionId = sid; request.onSession(sid); } });
+          controller.signal.throwIfAborted(); this.employeeIn(office, e.id); return result;
+        } catch (error) {
+          if (attempt >= 4 || controller.signal.aborted || !this.transientAgentError(error)) throw error;
+          this.emit('task.progress', `${e.name}: agent connection lost, retrying (${attempt}/4)…`, key);
+          await new Promise(resolve => setTimeout(resolve, 2000 * attempt));
+        }
+      }
+    } finally { clearTimeout(timeout); if (this.running.get(key)?.controller === controller) this.running.delete(key); }
+  }
+  private transientAgentError(error: unknown) {
+    if (error instanceof DOMException && error.name === 'AbortError') return false;
+    return /fetch failed|econnrefused|econnreset|etimedout|enotfound|eai_again|socket hang up|network|target closed|browser has been closed|502|503|504|temporar/i.test(String((error as Error)?.message || error));
   }
   private async runTask(office: Office, t: Task) {
     if (t.status !== 'WALKING_TO_WORKSTATION') return;
@@ -735,6 +750,7 @@ export class Engine {
   private tickSocialPlans(time: number) {
     for (const office of this.s.offices) {
       for (const plan of office.socialPostPlans) {
+        if (plan.status === 'failed' && plan.nextRetryAt && Date.parse(plan.nextRetryAt) <= time && plan.attempts < 5) { plan.status = 'approved'; plan.nextRetryAt = undefined; this.save(); }
         if (plan.status !== 'approved' || this.publishingPlans.has(plan.id)) continue;
         const due = Date.parse(plan.scheduledAt);
         if (!Number.isFinite(due)) { plan.status = 'failed'; plan.error = 'Invalid scheduled time; retry or cancel this post.'; continue; }
@@ -752,16 +768,26 @@ export class Engine {
       const handle = plan.platform === 'x' ? office.socialSettings.xHandle : plan.platform === 'instagram' ? office.socialSettings.instagramHandle : office.socialSettings.facebookHandle;
       const caption = [plan.caption, plan.hashtags.join(' ')].filter(Boolean).join('\n\n').trim();
       const result = await this.social.publish({ campaignId: plan.runId, optionId: plan.id, platform: plan.platform, caption, mediaUrls: plan.mediaUrl ? [plan.mediaUrl] : [], idempotencyKey: `plan:${plan.id}`, approvedBy: 'director', handle });
-      plan.status = 'published'; plan.publishedAt = result.postedAt || now(); plan.externalId = result.externalId; plan.url = result.url;
+      plan.status = 'published'; plan.publishedAt = result.postedAt || now(); plan.externalId = result.externalId; plan.url = result.url; plan.nextRetryAt = undefined; plan.error = undefined;
       office.socialPosts.unshift({ id: id(), platform: plan.platform, externalId: result.externalId, caption, mediaUrls: plan.mediaUrl ? [plan.mediaUrl] : [], permalink: result.url, postedAt: plan.publishedAt, likes: 0, comments: 0, shares: 0, saves: 0, impressions: 0, reach: 0, clicks: 0, source: 'published', createdAt: now() });
       this.emit('social.published', `Scheduled post published to ${plan.platform.toUpperCase()}.`, plan.id);
       if (this.telegram?.configured) await this.telegram.sendText(`✅ SCHEDULED POST PUBLISHED · ${office.name}\n${plan.platform.toUpperCase()}${result.url ? `\n${result.url}` : ''}\n\n${plan.caption.slice(0, 1200)}`).catch(() => undefined);
     } catch (error) {
-      plan.status = 'failed'; plan.error = safeError(error);
-      this.emit('social.failed', `Scheduled post failed: ${plan.error}`, plan.id);
-      if (this.telegram?.configured) await this.telegram.sendText(`⚠️ SCHEDULED POST FAILED · ${office.name}\n${plan.error}`).catch(() => undefined);
+      const message = safeError(error);
+      if (this.transientSocialError(error) && plan.attempts < 5) {
+        plan.status = 'approved'; plan.error = `${message} — automatic retry ${plan.attempts}/5 queued.`;
+        plan.nextRetryAt = new Date(Date.now() + Math.min(2 * plan.attempts, 10) * 60000).toISOString();
+        this.emit('social.plan', `Scheduled post retry ${plan.attempts}/5 queued: ${message}`, plan.id);
+      } else {
+        plan.status = 'failed'; plan.error = message;
+        this.emit('social.failed', `Scheduled post failed: ${plan.error}`, plan.id);
+        if (this.telegram?.configured) await this.telegram.sendText(`⚠️ SCHEDULED POST FAILED · ${office.name}\n${plan.error}`).catch(() => undefined);
+      }
     }
     this.save(); this.snapshot(true);
+  }
+  private transientSocialError(error: unknown) {
+    return /page\.goto: Timeout|locator\.waitFor: Timeout|waiting for .* to be visible|navigating to|net::ERR|econnrefused|econnreset|etimedout|target closed|browser has been closed|socket hang up|composer did not open|browser launch failed|automation is unavailable/i.test(String((error as Error)?.message || error));
   }
 
   // —— Social media pipeline ——
