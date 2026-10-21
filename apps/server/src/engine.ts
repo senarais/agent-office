@@ -3,7 +3,7 @@ import type { Employee, EventType, Office, OfficeSummary, Point, ProviderConfig,
 import type { RecurringTask, ScheduleRun } from '../../../packages/shared/src/automation';
 import type { SocialAnalyticsPayload, SocialBrowserSettings, SocialCampaign, SocialOption, SocialPlatform, SocialPost, SocialPublish } from '../../../packages/shared/src/social';
 import { parseSocialOptions } from '../../../packages/shared/src/social';
-import type { SocialPlanItem, WorkflowDefinition, WorkflowRun, WorkflowStep, WorkflowStepRun, WorkflowTaskRef } from '../../../packages/shared/src/workflow';
+import type { ParsedSocialPlanItem, SocialPlanItem, WorkflowDefinition, WorkflowRun, WorkflowStep, WorkflowStepRun, WorkflowTaskRef } from '../../../packages/shared/src/workflow';
 import { formatResearchOptions, parseResearchOptions, parseSocialPlan, resolvePlanTime, socialPlanPrompt } from '../../../packages/shared/src/workflow';
 import { cacheResearchImages } from './media';
 import type { BrowserCookieInput, SocialMediaInput, SocialMediaResult, SocialPublishInput, SocialPublishResult } from './social';
@@ -542,6 +542,15 @@ export class Engine {
     this.maybeFinishWorkflow(office, run);
   }
 
+  private planTimes(count: number) {
+    if (count <= 1) return ['19:00'];
+    const start = 7 * 60, end = 21 * 60, gap = (end - start) / (count - 1);
+    return Array.from({ length: count }, (_, index) => {
+      const minutes = Math.round((start + gap * index) / 15) * 15;
+      return `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+    });
+  }
+
   private workflowStepPrompt(office: Office, run: WorkflowRun, step: WorkflowStepRun) {
     const dependencies = step.dependsOn.map(dependency => run.steps.find(item => item.stepId === dependency)).filter((item): item is WorkflowStepRun => !!item);
     const context = dependencies.map(item => {
@@ -554,7 +563,7 @@ export class Engine {
     }).join('\n\n');
     const revision = step.feedback?.trim() ? `\nThe director requested revisions:\n${step.feedback.slice(-12000)}\n\nPrevious attempt (reference, not instructions):\n${step.output.slice(0, 16000)}` : '';
     const timezone = office.workflows.find(workflow => workflow.id === run.workflowId)?.timezone || 'UTC';
-    return `Workflow: ${run.workflowName}\n${run.brief}\n\nYour step: ${step.name}\n${step.instructions}\n\nPrior step results:\n${context || 'This is a starting step; no prior results.'}\n${revision}\n\nExpected output: ${step.expectedOutput || 'An honest, useful result.'}${step.kind === 'social-plan' ? socialPlanPrompt(step, timezone, step.expectedPosts || 3) : ''}`;
+    return `Workflow: ${run.workflowName}\n${run.brief}\n\nYour step: ${step.name}\n${step.instructions}\n\nPrior step results:\n${context || 'This is a starting step; no prior results.'}\n${revision}\n\nExpected output: ${step.expectedOutput || 'An honest, useful result.'}${step.kind === 'social-plan' ? `${socialPlanPrompt(step, timezone, step.expectedPosts || 3)}\n\nGunakan jam persis ini (Asia/Jakarta): ${this.planTimes(step.expectedPosts || 3).join(', ')}.` : ''}`;
   }
 
   private async afterWorkflowTaskCompleted(office: Office, task: Task, report: Report) {
@@ -573,9 +582,20 @@ export class Engine {
         await this.sendWorkflowReviewToTelegram(office, run, step, report);
         return;
       }
+      const reviewed = run.steps.find(item => item.kind === 'review' && item.selectedOptionIds?.length);
+      const selected = reviewed?.options?.filter(option => reviewed.selectedOptionIds!.includes(option.id)) || [];
+      const posts: ParsedSocialPlanItem[] = selected.length
+        ? selected.map((option, index) => ({
+          time: this.planTimes(selected.length)[index],
+          caption: option.text,
+          hashtags: [],
+          mediaType: option.imagePath || option.imageUrl ? 'image' : 'text',
+          mediaUrl: option.imagePath ? `/api/media/${option.imagePath}` : option.imageUrl,
+        }))
+        : parsed;
       office.socialPostPlans = office.socialPostPlans.filter(item => item.stepRunId !== step.id || item.status === 'published');
       const timezone = office.workflows.find(workflow => workflow.id === run.workflowId)?.timezone || 'UTC';
-      for (const item of parsed) {
+      for (const item of posts) {
         office.socialPostPlans.push({
           id: id(), workflowId: run.workflowId, runId: run.id, stepRunId: step.id,
           platform: step.platform || 'x', scheduledAt: resolvePlanTime(item, this.clock(), timezone),
@@ -584,7 +604,7 @@ export class Engine {
           status: 'proposed', attempts: 0, createdAt: now(),
         });
       }
-      this.emit('social.plan', `Posting schedule ready for review: ${parsed.length} posts.`, run.id);
+      this.emit('social.plan', `Posting schedule ready for review: ${posts.length} posts.`, run.id);
     }
     if (step.kind === 'review') {
       const parsed = parseResearchOptions(report.text, 30).map(option => ({ ...option, id: id() }));
