@@ -660,6 +660,7 @@ export class Engine {
       const parsed = parseResearchOptions(report.text, 30).map(option => ({ ...option, id: id() }));
       if (parsed.length) {
         step.options = parsed;
+        report.media = await cacheResearchImages(parsed, this.store.directory);
         report.text = formatResearchOptions(parsed);
         step.output = report.text;
       }
