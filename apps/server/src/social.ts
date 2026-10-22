@@ -377,7 +377,7 @@ export class SocialService {
     try { await button.click({ timeout }); }
     catch { throw new Error('X Post button click was not confirmed; the post may still have been submitted. Check the account before retrying.'); }
     const composer = page.locator('[data-testid="tweetTextarea_0"]').first();
-    const view = page.getByRole('link', { name: /View/i }).last();
+    const view = page.locator('[data-testid="toast"] a[href*="/status/"], a[href*="/status/"][aria-label*="View" i]').last();
     const postedHref = await Promise.race([
       view.waitFor({ state: 'visible', timeout }).then(() => view.getAttribute('href')).catch(() => null),
       composer.waitFor({ state: 'hidden', timeout }).then(() => null).catch(() => null),
