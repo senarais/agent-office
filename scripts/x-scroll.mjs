@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { chromium } from 'playwright';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkdirSync, readdirSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
@@ -69,6 +68,8 @@ function releaseLock() {
 }
 await acquireLock();
 process.once('exit', releaseLock);
+// Playwright costs ~100 MB; load it only after this process owns the shared browser queue.
+const { chromium } = await import('playwright');
 const hardStop = setTimeout(() => { console.error('[x-scroll] browser work exceeded 6 minutes; releasing the queue.'); process.exit(1); }, 360000);
 async function launch() {
   let lastError;
