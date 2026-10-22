@@ -121,11 +121,18 @@ async function launch() {
 }
 const context = await launch();
 const page = context.pages()[0] || await context.newPage();
+async function load(url) {
+  try { await page.goto(url, { waitUntil: 'commit', timeout: 60000 }); }
+  catch (error) {
+    await page.goto(url, { waitUntil: 'commit', timeout: 60000 }).catch(() => undefined);
+    if (!page.url().startsWith('https://x.com')) throw error;
+  }
+  await page.waitForSelector('article[data-testid="tweet"]', { timeout: 60000 }).catch(() => undefined);
+}
 try {
   for (const item of targets) console.error(`[x-scroll] fetching ${item.label}${targets.length > 1 ? ` (${item.query})` : ''}`);
-  const signedIn = await page.goto(targets[0].target, { waitUntil: 'domcontentloaded', timeout: 120000 }).then(() => true).catch(() => false);
-  if (!signedIn) throw new Error('Timed out loading the first X page.');
-  await page.waitForSelector('article[data-testid="tweet"]', { timeout: 90000 }).catch(() => undefined);
+  await load(targets[0].target);
+  if (!(await page.locator('[data-testid="SideNav_AccountSwitcher_Button"]').count()) && /\/login|i\/flow\/login/.test(page.url())) throw new Error('X profile is not signed in.');
   if (!(await page.locator('[data-testid="SideNav_AccountSwitcher_Button"]').count())) {
     console.error('X profile is not signed in. Open the office Social panel and sign in to X once, then retry.');
     process.exitCode = 2;
@@ -134,8 +141,7 @@ try {
     for (const item of targets) {
       if (item.target !== targets[0].target) {
         console.error(`[x-scroll] loading ${item.label}`);
-        await page.goto(item.target, { waitUntil: 'domcontentloaded', timeout: 120000 });
-        await page.waitForSelector('article[data-testid="tweet"]', { timeout: 90000 }).catch(() => undefined);
+        await load(item.target);
       }
       const collected = new Map();
       const snapshot = async () => {
