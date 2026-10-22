@@ -49,7 +49,7 @@ const lockDir = resolve(dataDir, 'browser', 'x-scrape.lock');
 const sleep = ms => new Promise(done => setTimeout(done, ms));
 const alive = pid => { try { process.kill(pid, 0); return true; } catch (error) { return error?.code === 'EPERM'; } };
 async function acquireLock() {
-  const deadline = Date.now() + 480000;
+  const deadline = Date.now() + 480000; let waited = 0;
   mkdirSync(resolve(dataDir, 'browser'), { recursive: true, mode: 0o700 });
   while (Date.now() < deadline) {
     try { mkdirSync(lockDir); writeFileSync(resolve(lockDir, 'pid'), String(process.pid)); return; }
@@ -58,6 +58,7 @@ async function acquireLock() {
       let owner = 0;
       try { owner = Number(readFileSync(resolve(lockDir, 'pid'), 'utf8').trim()) || 0; } catch { /* being written */ }
       if (!owner || !alive(owner)) { rmSync(lockDir, { recursive: true, force: true }); continue; }
+      if (Date.now() - waited > 15000) { waited = Date.now(); console.error(`[x-scroll] waiting for the shared browser queue (${Math.ceil((deadline - Date.now()) / 1000)}s left)`); }
       await sleep(2000);
     }
   }
@@ -68,6 +69,7 @@ function releaseLock() {
 }
 await acquireLock();
 process.once('exit', releaseLock);
+const hardStop = setTimeout(() => { console.error('[x-scroll] browser work exceeded 6 minutes; releasing the queue.'); process.exit(1); }, 360000);
 async function launch() {
   let lastError;
   for (let attempt = 1; attempt <= 2; attempt++) {
@@ -78,7 +80,7 @@ async function launch() {
         executablePath: process.env.SOCIAL_BROWSER_EXECUTABLE || undefined,
         viewport: { width: 1280, height: 900 },
         locale: 'en-US', chromiumSandbox: false, timeout: 180000,
-        args: ['--disable-dev-shm-usage', '--disable-gpu', '--blink-settings=imagesEnabled=false'],
+        args: ['--disable-dev-shm-usage', '--disable-gpu', '--disable-software-rasterizer', '--disable-accelerated-2d-canvas', '--renderer-process-limit=1', '--js-flags=--max-old-space-size=128', '--blink-settings=imagesEnabled=false'],
       });
     } catch (error) {
       lastError = error;
@@ -146,4 +148,5 @@ try {
   process.exitCode = 1;
 } finally {
   await context.close().catch(() => undefined);
+  clearTimeout(hardStop);
 }

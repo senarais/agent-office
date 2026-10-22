@@ -247,8 +247,8 @@ export class Engine {
   }
   private async execute(e: Employee, key: string, request: Omit<AgentRequest, 'signal' | 'system'>, office: Office = this.office) {
     this.employeeIn(office, e.id); const provider = this.adapter(e); let sessionId = request.sessionId;
-    const idleMs = Number(process.env.AGENT_IDLE_TIMEOUT_MS || 720_000);
-    const attemptMs = Number(process.env.AGENT_ATTEMPT_TIMEOUT_MS || 1_500_000);
+    const idleMs = Number(process.env.AGENT_IDLE_TIMEOUT_MS || 1_080_000);
+    const attemptMs = Number(process.env.AGENT_ATTEMPT_TIMEOUT_MS || 2_100_000);
     const maxAttempts = Math.max(1, Number(process.env.AGENT_MAX_ATTEMPTS || 3));
     const retryDelay = Math.max(0, Number(process.env.AGENT_RETRY_DELAY_MS || 2000));
     let lastError: unknown;
