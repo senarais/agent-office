@@ -120,7 +120,7 @@ async function launch() {
   throw lastError instanceof Error ? lastError : new Error('Browser launch failed.');
 }
 const context = await launch();
-const page = context.pages()[0] || await context.newPage();
+let page = context.pages()[0] || await context.newPage();
 async function load(url) {
   try { await page.goto(url, { waitUntil: 'commit', timeout: 60000 }); }
   catch (error) {
@@ -138,9 +138,11 @@ try {
     process.exitCode = 2;
   } else {
     const results = [];
-    for (const item of targets) {
-      if (item.target !== targets[0].target) {
+    for (const [index, item] of targets.entries()) {
+      if (index > 0) {
         console.error(`[x-scroll] loading ${item.label}`);
+        await page.close().catch(() => undefined);
+        page = await context.newPage();
         await load(item.target);
       }
       const collected = new Map();
