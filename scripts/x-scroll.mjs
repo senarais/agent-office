@@ -122,6 +122,7 @@ async function launch() {
 const context = await launch();
 const page = context.pages()[0] || await context.newPage();
 try {
+  for (const item of targets) console.error(`[x-scroll] fetching ${item.label}${targets.length > 1 ? ` (${item.query})` : ''}`);
   const signedIn = await page.goto(targets[0].target, { waitUntil: 'domcontentloaded', timeout: 120000 }).then(() => true).catch(() => false);
   if (!signedIn) throw new Error('Timed out loading the first X page.');
   await page.waitForSelector('article[data-testid="tweet"]', { timeout: 90000 }).catch(() => undefined);
@@ -132,6 +133,7 @@ try {
     const results = [];
     for (const item of targets) {
       if (item.target !== targets[0].target) {
+        console.error(`[x-scroll] loading ${item.label}`);
         await page.goto(item.target, { waitUntil: 'domcontentloaded', timeout: 120000 });
         await page.waitForSelector('article[data-testid="tweet"]', { timeout: 90000 }).catch(() => undefined);
       }
@@ -175,6 +177,7 @@ try {
       }
       const tweets = [...collected.values()].slice(0, limit);
       results.push({ label: item.label, query: item.query || undefined, url: page.url(), count: tweets.length, tweets });
+      console.error(`[x-scroll] ${item.label}: ${tweets.length} tweets`);
     }
     const output = batch
       ? JSON.stringify({ mode: 'batch', count: results.reduce((sum, item) => sum + item.count, 0), batches: results }, null, 2)
