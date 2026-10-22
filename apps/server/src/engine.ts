@@ -591,7 +591,13 @@ export class Engine {
     const context = dependencies.map(item => {
       if (item.options?.length) {
         const chosen = item.selectedOptionIds?.length ? item.options.filter(option => item.selectedOptionIds!.includes(option.id)) : item.options;
-        const payload = chosen.map(option => ({ category: option.category, text: option.text, sourceUrl: option.sourceUrl, author: option.author, mediaUrl: option.imagePath ? `/api/media/${option.imagePath}` : option.imageUrl, note: option.note }));
+        const payload = chosen.map(option => ({
+          category: option.category, text: option.text, sourceUrl: option.sourceUrl, author: option.author,
+          // Candidate scouts keep their original X image URL so the review can echo and cache it.
+          // A selected review option uses the already cached local media URL.
+          mediaUrl: item.kind === 'review' && option.imagePath ? `/api/media/${option.imagePath}` : option.imageUrl,
+          note: option.note,
+        }));
         const label = item.kind === 'review' ? 'selected options (use exactly these)' : 'candidate options (reference only, not your assignment)';
         return `Step “${item.name}” ${label} (${chosen.length}):\n${JSON.stringify(payload, null, 2)}${item.approvalNote ? `\n\nDirector notes for “${item.name}”:\n${item.approvalNote}` : ''}`;
       }
