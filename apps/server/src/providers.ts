@@ -8,6 +8,8 @@ export interface AgentRequest {
   signal: AbortSignal; sessionId?: string; projectPath?: string; tools: string[];
   onSession: (id: string) => void; onText: (text: string) => void;
   onActivity: (activity: 'working' | 'reading' | 'terminal' | 'waiting', detail: string) => void;
+  /** Called before a timed-out attempt is restarted; discard any partial streamed text. */
+  onRetry?: (reason: string) => void;
 }
 export interface AgentProvider { listModels(): Promise<string[]>; execute(request: AgentRequest): Promise<{ text: string; usage?: Usage }> }
 

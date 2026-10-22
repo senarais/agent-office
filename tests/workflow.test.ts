@@ -183,7 +183,7 @@ test('scheduled workflows claim one run, skip overlap, and compute the next occu
   assert.equal(f.engine.s.workflowRuns[0].status, 'cancelled');
 });
 
-test('server restart marks an active workflow failed instead of silently resuming it', async t => {
+test('server restart requeues an in-flight workflow task instead of failing the run', async t => {
   const f = fixture(t), employee = f.engine.hire(profile); employee.position = { ...employee.home };
   const workflow = f.engine.createWorkflow({
     name: 'Restart flow', description: 'Recovery test.', timezone: 'Asia/Jakarta', schedule: null, enabled: true,
@@ -196,12 +196,13 @@ test('server restart marks an active workflow failed instead of silently resumin
   f.engine.save();
   const disk = new Store(f.directory); const reopened = new Engine(disk, f.time); reopened.recover();
   const restored = reopened.s.workflowRuns[0];
-  assert.equal(restored.status, 'failed'); assert.equal(restored.steps[0].status, 'failed');
-  assert.match(restored.errors[0], /Server restarted/);
+  assert.equal(restored.status, 'running'); assert.equal(restored.steps[0].status, 'queued');
+  const restoredTask = reopened.s.tasks.find(item => item.id === restored.steps[0].taskId)!;
+  assert.equal(restoredTask.status, 'QUEUED'); assert.equal(restoredTask.result, '');
   reopened.stop();
 });
 
-test('restart fails a run that was interrupted after task completion instead of leaving it stuck', async t => {
+test('restart recovers a run interrupted between task completion and its next transition', async t => {
   const f = fixture(t), employee = f.engine.hire(profile); employee.position = { ...employee.home };
   const workflow = f.engine.createWorkflow({
     name: 'Crash window flow', description: 'Recovery test.', timezone: 'Asia/Jakarta', schedule: null, enabled: true,
@@ -214,7 +215,8 @@ test('restart fails a run that was interrupted after task completion instead of 
   f.engine.save();
   const reopened = new Engine(new Store(f.directory), f.time); reopened.recover();
   const restored = reopened.s.workflowRuns[0];
-  assert.equal(restored.status, 'failed'); assert.equal(restored.steps[0].status, 'failed');
+  assert.equal(restored.status, 'running'); assert.equal(restored.steps[0].status, 'queued');
+  assert.notEqual(restored.steps[0].taskId, undefined);
   reopened.stop();
 });
 
@@ -333,4 +335,24 @@ test('review step requires a real selection and honours only valid option ids', 
   assert.deepEqual(step.selectedOptionIds, chosen);
   assert.equal(step.status, 'approved');
   assert.equal(run.status, 'completed');
+});
+
+test('an idle agent attempt is aborted and retried with a fresh session', async t => {
+  const f = fixture(t), p = await f.engine.configureProvider({ name: 'Watchdog fixture', kind: 'generic', baseUrl: 'http://127.0.0.1:1/v1', model: 'watchdog-test' });
+  const employee = f.engine.hire({ ...profile, providerId: p.id, model: 'watchdog-test' }); employee.position = { ...employee.home };
+  let attempts = 0; const sessions: (string | undefined)[] = [];
+  f.engine.providerFactory = () => ({
+    listModels: async () => ['watchdog-test'],
+    execute: async request => {
+      attempts++; sessions.push(request.sessionId);
+      if (attempts === 1) await new Promise((_, reject) => request.signal.addEventListener('abort', () => reject(request.signal.reason), { once: true }));
+      request.onText('Recovered after the watchdog reset.'); return { text: 'Recovered after the watchdog reset.' };
+    },
+  });
+  process.env.AGENT_IDLE_TIMEOUT_MS = '30'; process.env.AGENT_MAX_ATTEMPTS = '2'; process.env.AGENT_RETRY_DELAY_MS = '1';
+  t.after(() => { delete process.env.AGENT_IDLE_TIMEOUT_MS; delete process.env.AGENT_MAX_ATTEMPTS; delete process.env.AGENT_RETRY_DELAY_MS; });
+  const task = f.engine.task({ employeeId: employee.id, title: 'Watchdog work', instructions: 'Finish.', expectedOutput: '', priority: 'Normal', tools: [] });
+  await advanceUntil(f.engine, () => task.status === 'COMPLETED');
+  assert.equal(attempts, 2); assert.equal(task.result, 'Recovered after the watchdog reset.');
+  assert.deepEqual(sessions, [undefined, undefined]);
 });

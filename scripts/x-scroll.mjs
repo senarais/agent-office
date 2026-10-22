@@ -49,7 +49,7 @@ const lockDir = resolve(dataDir, 'browser', 'x-scrape.lock');
 const sleep = ms => new Promise(done => setTimeout(done, ms));
 const alive = pid => { try { process.kill(pid, 0); return true; } catch (error) { return error?.code === 'EPERM'; } };
 async function acquireLock() {
-  const deadline = Date.now() + 240000;
+  const deadline = Date.now() + 480000;
   mkdirSync(resolve(dataDir, 'browser'), { recursive: true, mode: 0o700 });
   while (Date.now() < deadline) {
     try { mkdirSync(lockDir); writeFileSync(resolve(lockDir, 'pid'), String(process.pid)); return; }
@@ -61,7 +61,7 @@ async function acquireLock() {
       await sleep(2000);
     }
   }
-  throw new Error('X scrape queue is busy after 4 minutes. Retry later.');
+  throw new Error('X scrape queue is busy after 8 minutes. Retry later.');
 }
 function releaseLock() {
   try { if (Number(readFileSync(resolve(lockDir, 'pid'), 'utf8').trim()) === process.pid) rmSync(lockDir, { recursive: true, force: true }); } catch { /* gone */ }

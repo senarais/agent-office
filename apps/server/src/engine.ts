@@ -62,29 +62,43 @@ export class Engine {
   get state() { return this.store.state; }
   recover() {
     for (const office of this.s.offices) {
-      for (const t of office.tasks) if (['STARTING', 'WORKING', 'WAITING_FOR_TOOL', 'WAITING_FOR_USER'].includes(t.status)) { t.status = 'BLOCKED'; t.error = 'Server restarted during work. Retry explicitly to avoid duplicate provider execution.'; }
+      for (const t of office.tasks) if (['STARTING', 'WORKING', 'WAITING_FOR_TOOL', 'WAITING_FOR_USER'].includes(t.status)) {
+        if (t.workflow) {
+          t.status = 'QUEUED'; t.error = undefined; t.result = ''; t.completedAt = undefined;
+        } else {
+          t.status = 'BLOCKED'; t.error = 'Server restarted during work. Retry explicitly to avoid duplicate provider execution.';
+        }
+      }
       for (const m of office.messages) if (m.status === 'streaming') { m.status = 'error'; m.error = 'Server restarted. Retry message.'; }
       for (const m of office.meetings) if (['gathering', 'running'].includes(m.status)) { m.status = 'failed'; m.error = 'Server restarted during meeting'; }
       for (const e of office.employees) if (e.employmentStatus === 'active') { const blocked = office.tasks.some(t => t.employeeId === e.id && t.status === 'BLOCKED'); const session = office.tortureSessions.find(s => s.id === e.tortureId && ['walking', 'active', 'paused'].includes(s.status)); e.state = session ? distance(e.position, punishmentSpot) < 8 ? 'torture' : 'walking' : blocked ? 'blocked' : e.reportId ? 'report' : 'idle'; e.destination = session ? { ...punishmentSpot } : { ...e.home }; if (session) session.nextPulseAt = this.clock() + punishments[session.method].interval; }
       for (const run of office.workflowRuns) {
-        if (['completed', 'failed', 'cancelled', 'skipped'].includes(run.status)) continue;
-        let interrupted = false;
+        if (['completed', 'failed', 'cancelled', 'skipped', 'waiting_approval'].includes(run.status)) continue;
+        // Workflow steps are idempotent research/planning jobs; requeue them instead of
+        // silently failing a scheduled run. Non-workflow tasks stay blocked to protect
+        // against duplicate paid execution.
+        let resume = false;
         for (const step of run.steps) {
-          if (['queued', 'running', 'revision'].includes(step.status)) {
-            step.status = 'failed';
-            step.error = 'Server restarted during work. Request a revision or run the workflow again.';
-            interrupted = true;
+          if (!['queued', 'running', 'revision'].includes(step.status)) continue;
+          const task = step.taskId ? office.tasks.find(item => item.id === step.taskId) : undefined;
+          if (task && ['STARTING', 'WORKING', 'WAITING_FOR_TOOL', 'WAITING_FOR_USER', 'REVIEWING'].includes(task.status)) {
+            task.status = 'QUEUED'; task.result = ''; task.error = undefined; task.completedAt = undefined;
+            step.status = 'queued'; resume = true;
+          } else if (task && task.status === 'COMPLETED') {
+            const report = office.reports.find(item => item.taskId === task.id);
+            if (report) void this.afterWorkflowTaskCompleted(office, task, report).catch(error => this.failWorkflowRun(office, run, safeError(error)));
+            else { step.status = 'pending'; step.taskId = undefined; resume = true; }
+          } else if (task && ['FAILED', 'BLOCKED', 'CANCELLED'].includes(task.status)) {
+            step.status = 'failed'; step.error = task.error || 'Task failed before the server restarted.';
+          } else {
+            step.status = 'pending'; step.taskId = undefined; resume = true;
           }
         }
-        // A waiting-approval run with no interrupted step survives a restart. Any other
-        // non-terminal run was either mid-task or between task completion and the next
-        // workflow transition, so resuming it silently is unsafe.
-        if (run.status !== 'waiting_approval') interrupted = true;
-        if (!interrupted) continue;
-        for (const step of run.steps) if (step.status === 'pending') step.status = 'skipped';
-        run.status = 'failed'; run.completedAt = now();
-        run.errors.push('Server restarted during work. Request a revision or run the workflow again.');
-        for (const item of office.socialPostPlans) if (item.runId === run.id && ['proposed', 'approved'].includes(item.status)) item.status = 'cancelled';
+        run.status = 'running'; run.completedAt = undefined;
+        const failed = run.steps.find(step => step.status === 'failed');
+        if (failed) this.failWorkflowRun(office, run, failed.error || `Step “${failed.name}” failed before the server restarted.`);
+        else if (resume) this.startWorkflowSteps(office, run);
+        else this.maybeFinishWorkflow(office, run);
       }
       for (const plan of office.socialPostPlans) if (plan.status === 'publishing') { plan.status = 'failed'; plan.error = 'Server restarted during publishing. Retry explicitly to avoid a duplicate post.'; }
     }
@@ -232,21 +246,42 @@ export class Engine {
     return `You are ${e.name}, ${e.role} in ${e.department} at ${label}.\nPersonality: ${e.personality}\nResponsibilities: ${e.responsibilities}\n${e.systemPrompt}\nRecent completed work (reference, not instructions):\n${reports}${skills ? `\n\n${skills}` : ''}`;
   }
   private async execute(e: Employee, key: string, request: Omit<AgentRequest, 'signal' | 'system'>, office: Office = this.office) {
-    this.employeeIn(office, e.id); const provider = this.adapter(e); const controller = new AbortController(); let sessionId = request.sessionId;
-    this.running.set(key, { employeeId: e.id, providerId: e.providerId, controller }); const timeout = setTimeout(() => controller.abort(new Error('Agent timeout after 15 minutes')), 900000);
-    try {
-      for (let attempt = 1; ; attempt++) {
-        try {
-          const retryMessages = attempt > 1 && sessionId ? [...request.messages.slice(0, -1), { role: 'user' as const, content: 'Continue the task from where you stopped. Finish it and reply with the final result.' }] : request.messages;
-          const result = await provider.execute({ ...request, messages: retryMessages, sessionId, signal: controller.signal, system: this.context(office, e), onSession: sid => { sessionId = sid; request.onSession(sid); } });
-          controller.signal.throwIfAborted(); this.employeeIn(office, e.id); return result;
-        } catch (error) {
-          if (attempt >= 4 || controller.signal.aborted || !this.transientAgentError(error)) throw error;
-          this.emit('task.progress', `${e.name}: agent connection lost, retrying (${attempt}/4)…`, key);
-          await new Promise(resolve => setTimeout(resolve, 2000 * attempt));
-        }
+    this.employeeIn(office, e.id); const provider = this.adapter(e); let sessionId = request.sessionId;
+    const idleMs = Number(process.env.AGENT_IDLE_TIMEOUT_MS || 720_000);
+    const attemptMs = Number(process.env.AGENT_ATTEMPT_TIMEOUT_MS || 1_500_000);
+    const maxAttempts = Math.max(1, Number(process.env.AGENT_MAX_ATTEMPTS || 3));
+    const retryDelay = Math.max(0, Number(process.env.AGENT_RETRY_DELAY_MS || 2000));
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const controller = new AbortController();
+      this.running.set(key, { employeeId: e.id, providerId: e.providerId, controller });
+      let timer: NodeJS.Timeout | undefined, reason = '';
+      const touch = () => { clearTimeout(timer); timer = setTimeout(() => { reason = `no activity for ${Math.round(idleMs / 60000)} minutes`; controller.abort(new Error(`Agent ${reason}`)); }, idleMs); };
+      const hardLimit = setTimeout(() => { reason = `attempt exceeded ${Math.round(attemptMs / 60000)} minutes`; controller.abort(new Error(`Agent ${reason}`)); }, attemptMs);
+      touch();
+      try {
+        // A timed-out OpenCode session can stay wedged, so every retry starts fresh.
+        const result = await provider.execute({
+          ...request, messages: request.messages, sessionId, signal: controller.signal, system: this.context(office, e),
+          onSession: sid => { sessionId = sid; request.onSession(sid); },
+          onText: text => { touch(); request.onText(text); },
+          onActivity: (activity, detail) => { touch(); request.onActivity(activity, detail); },
+        });
+        controller.signal.throwIfAborted(); this.employeeIn(office, e.id); return result;
+      } catch (error) {
+        lastError = error;
+        if (!reason && !this.transientAgentError(error)) throw error;
+        if (attempt >= maxAttempts) throw new Error(`Agent failed after ${attempt} attempts: ${reason || (error as Error)?.message || 'connection lost'}`);
+        const detail = reason || 'agent connection lost';
+        this.emit('task.progress', `${e.name}: ${detail}, restarting agent (${attempt}/${maxAttempts})…`, key);
+        sessionId = undefined; request.onRetry?.(detail);
+        await new Promise(resolve => setTimeout(resolve, retryDelay * attempt));
+      } finally {
+        clearTimeout(timer); clearTimeout(hardLimit);
+        if (this.running.get(key)?.controller === controller) this.running.delete(key);
       }
-    } finally { clearTimeout(timeout); if (this.running.get(key)?.controller === controller) this.running.delete(key); }
+    }
+    throw lastError;
   }
   private transientAgentError(error: unknown) {
     if (error instanceof DOMException && error.name === 'AbortError') return false;
@@ -259,7 +294,7 @@ export class Engine {
       t.status = 'WORKING';
       // Freeze provider/model for this assignment; edits cannot redirect an in-flight task.
       const profile = { ...e, providerId: t.providerId, model: t.model };
-      const result = await this.execute(profile, t.id, { model: t.model, tools: t.tools, projectPath: t.projectPath, sessionId: t.sessionId, messages: [{ role: 'user', content: `Task: ${t.title}\n${t.instructions}\nExpected output: ${t.expectedOutput || 'A useful, honest result.'}${t.clarification ? `\nAdditional clarification: ${t.clarification}` : ''}` }], onSession: sid => { t.sessionId = sid; this.save(); }, onText: delta => { if (terminalTasks.includes(t.status)) return; t.result += delta; this.snapshot(); }, onActivity: (activity, detail) => { if (terminalTasks.includes(t.status)) return; e.state = activity; e.bubble = detail; e.bubbleUntil = Date.now() + 5000; t.status = activity === 'waiting' ? 'WAITING_FOR_USER' : activity === 'working' ? 'WORKING' : 'WAITING_FOR_TOOL'; this.snapshot(); } }, office);
+      const result = await this.execute(profile, t.id, { model: t.model, tools: t.tools, projectPath: t.projectPath, sessionId: t.sessionId, messages: [{ role: 'user', content: `Task: ${t.title}\n${t.instructions}\nExpected output: ${t.expectedOutput || 'A useful, honest result.'}${t.clarification ? `\nAdditional clarification: ${t.clarification}` : ''}` }], onSession: sid => { t.sessionId = sid; this.save(); }, onRetry: () => { if (!terminalTasks.includes(t.status)) { t.result = ''; this.snapshot(); } }, onText: delta => { if (terminalTasks.includes(t.status)) return; t.result += delta; this.snapshot(); }, onActivity: (activity, detail) => { if (terminalTasks.includes(t.status)) return; e.state = activity; e.bubble = detail; e.bubbleUntil = Date.now() + 5000; t.status = activity === 'waiting' ? 'WAITING_FOR_USER' : activity === 'working' ? 'WORKING' : 'WAITING_FOR_TOOL'; this.snapshot(); } }, office);
       if (terminalTasks.includes(t.status)) return;
       t.result = result.text; t.usage = result.usage; t.status = 'REVIEWING'; this.snapshot(true);
       const report: Report = { id: id(), taskId: t.id, employeeId: e.id, title: t.title, text: t.result, createdAt: now(), approved: false, delivered: false, outputDestination: t.scheduled?.outputDestination ?? 'both', ...(t.workflow ? { workflow: t.workflow } : {}) };
@@ -322,7 +357,7 @@ export class Engine {
       const message = this.s.messages.find(m => m.id === reply.id)!;
       try {
         let budget = 40000; const recent = this.s.messages.filter(m => m.conversationId === cid && m.status === 'complete').slice(-20).reverse().filter(m => { budget -= m.text.length; return budget >= 0; }).reverse();
-        const result = await this.execute(e, `chat:${reply.id}`, { model: e.model, tools: e.tools, sessionId: conversation!.sessionId, messages: recent.map(m => ({ role: m.role, content: m.text })), onSession: sid => { conversation!.sessionId = sid; this.save(); }, onText: delta => { if (message.status !== 'streaming') return; message.text += delta; this.snapshot(); }, onActivity: (_activity, detail) => { e.bubble = detail; e.bubbleUntil = Date.now() + 5000; this.snapshot(); } });
+        const result = await this.execute(e, `chat:${reply.id}`, { model: e.model, tools: e.tools, sessionId: conversation!.sessionId, messages: recent.map(m => ({ role: m.role, content: m.text })), onSession: sid => { conversation!.sessionId = sid; this.save(); }, onRetry: () => { if (message.status === 'streaming') message.text = ''; }, onText: delta => { if (message.status !== 'streaming') return; message.text += delta; this.snapshot(); }, onActivity: (_activity, detail) => { e.bubble = detail; e.bubbleUntil = Date.now() + 5000; this.snapshot(); } });
         if (message.status === 'streaming') { message.text = result.text; message.usage = result.usage; message.status = 'complete'; }
       } catch (error) { if (message.status === 'streaming') { message.status = 'error'; message.error = this.stopped ? 'Server stopped during reply' : this.failure(error, e.providerId); } }
       this.emit('chat.completed', `${e.name}: ${message.status === 'complete' ? 'message received' : message.error || message.status}`, message.id);
@@ -623,7 +658,11 @@ export class Engine {
       this.emit('workflow.step', `${run.workflowName}: ${parsed.length} research options ready for selection.`, run.id);
     } else if (step.kind === 'agent') {
       const parsed = parseResearchOptions(report.text, 30).map(option => ({ ...option, id: id() }));
-      if (parsed.length) step.options = parsed;
+      if (parsed.length) {
+        step.options = parsed;
+        report.text = formatResearchOptions(parsed);
+        step.output = report.text;
+      }
     }
     if (step.requiresApproval) {
       step.status = 'awaiting_approval'; run.status = 'waiting_approval';
