@@ -98,7 +98,7 @@ const warmed = readCache();
 if (warmed) { console.log(warmed); process.exit(0); }
 // Playwright costs ~100 MB; load it only after this process owns the shared browser queue.
 const { chromium } = await import('playwright');
-const hardStop = setTimeout(() => { console.error('[x-scroll] browser work exceeded 6 minutes; releasing the queue.'); process.exit(1); }, 360000);
+const hardStop = setTimeout(() => { console.error('[x-scroll] browser work exceeded 8 minutes; releasing the queue.'); process.exit(1); }, 480000);
 async function launch() {
   let lastError;
   for (let attempt = 1; attempt <= 2; attempt++) {
@@ -127,7 +127,7 @@ async function load(url) {
     await page.goto(url, { waitUntil: 'commit', timeout: 60000 }).catch(() => undefined);
     if (!page.url().startsWith('https://x.com')) throw error;
   }
-  await page.waitForSelector('article[data-testid="tweet"]', { timeout: 60000 }).catch(() => undefined);
+  await page.waitForSelector('article[data-testid="tweet"]', { timeout: 30000 }).catch(() => undefined);
 }
 try {
   for (const item of targets) console.error(`[x-scroll] fetching ${item.label}${targets.length > 1 ? ` (${item.query})` : ''}`);
@@ -196,6 +196,7 @@ try {
   console.error(`X scroll failed: ${error instanceof Error ? error.message : String(error)}`);
   process.exitCode = 1;
 } finally {
-  await context.close().catch(() => undefined);
+  const closed = await Promise.race([context.close().then(() => true).catch(() => false), new Promise(resolve => setTimeout(() => resolve(false), 5000))]);
+  if (!closed) { try { execFileSync('pkill', ['-f', profile]); } catch { /* already gone */ } }
   clearTimeout(hardStop);
 }
