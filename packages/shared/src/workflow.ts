@@ -45,6 +45,13 @@ export interface WorkflowDefinition {
   deletedAt?: string;
 }
 
+/** Director-chosen local date and time range for the generated post schedule. */
+export interface ScheduleWindow {
+  date: string;
+  start: string;
+  end: string;
+}
+
 export interface ResearchOption {
   id: string;
   category: string;
@@ -69,6 +76,7 @@ export interface WorkflowStepRun {
   kind: WorkflowStepKind;
   platform?: SocialPlatform;
   expectedPosts?: number;
+  scheduleWindow?: ScheduleWindow;
   status: WorkflowStepStatus;
   taskId?: string;
   reportId?: string;
@@ -271,6 +279,60 @@ function zonedTimestamp(year: number, month: number, day: number, hour: number, 
   return guess;
 }
 
+const minuteOfDay = (value: string) => {
+  const match = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(value);
+  return match ? Number(match[1]) * 60 + Number(match[2]) : undefined;
+};
+
+const formatMinute = (minutes: number) => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+
+function windowDate(window: ScheduleWindow) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(window.date);
+  if (!match) return undefined;
+  const year = Number(match[1]), month = Number(match[2]), day = Number(match[3]);
+  const check = new Date(Date.UTC(year, month - 1, day));
+  if (check.getUTCFullYear() !== year || check.getUTCMonth() !== month - 1 || check.getUTCDate() !== day) return undefined;
+  return { year, month, day };
+}
+
+/** Evenly spread post times inside the director's window, keeping the first and last slots on the edges. */
+export function scheduleWindowTimes(window: ScheduleWindow, count: number): string[] {
+  const start = minuteOfDay(window.start);
+  const end = minuteOfDay(window.end);
+  if (start === undefined || end === undefined || end <= start || count < 1) return [];
+  if (count === 1) return [formatMinute(Math.min(end, Math.round((start + end) / 10) * 5))];
+  const gap = (end - start) / (count - 1);
+  return Array.from({ length: count }, (_, index) => {
+    if (index === 0) return formatMinute(start);
+    if (index === count - 1) return formatMinute(end);
+    return formatMinute(Math.min(end, Math.round((start + gap * index) / 5) * 5));
+  });
+}
+
+/** Resolve one HH:MM slot on the chosen date to a real UTC timestamp in the workflow timezone. */
+export function resolveScheduleWindowTime(window: ScheduleWindow, time: string, timezone: string): string | undefined {
+  const date = windowDate(window);
+  const minutes = minuteOfDay(time);
+  if (!date || minutes === undefined) return undefined;
+  return new Date(zonedTimestamp(date.year, date.month, date.day, Math.floor(minutes / 60), minutes % 60, timezone)).toISOString();
+}
+
+/** Human-readable reason a director's schedule window cannot be used, or undefined when it is valid. */
+export function validateScheduleWindow(window: ScheduleWindow, count: number, timezone: string, after = Date.now()): string | undefined {
+  const date = windowDate(window);
+  if (!date) return 'Choose a valid schedule date.';
+  const start = minuteOfDay(window.start);
+  const end = minuteOfDay(window.end);
+  if (start === undefined || end === undefined) return 'Use HH:MM for the schedule window.';
+  if (end <= start) return 'Schedule window end must be later than its start.';
+  if (count > 1 && end - start < (count - 1) * 5) return `A ${count}-post window needs at least ${(count - 1) * 5} minutes.`;
+  let startAt: number;
+  try { startAt = zonedTimestamp(date.year, date.month, date.day, Math.floor(start / 60), start % 60, timezone); }
+  catch { return 'Invalid workflow timezone.'; }
+  if (startAt < after + 10 * 60 * 1000) return `Schedule window must start at least 10 minutes from now (${timezone}).`;
+  return undefined;
+}
+
 /**
  * Resolve an agent's posting time into a real UTC timestamp. Times are interpreted in the
  * workflow timezone; a past time rolls to the next day so an approved schedule never fires
@@ -305,6 +367,7 @@ const dailyResearchPrompt = `Kamu adalah trend scout untuk akun X ini. Kumpulkan
 
 ALAT & SUMBER
 - Baca .agents/skills/agent-reach/SKILL.md dan ikuti routing-nya. Jika CLI agent-reach tidak tersedia, jangan mengklaim memakainya; gunakan scripts/x-scroll.mjs yang membaca profil X yang sudah login.
+- Baca docs/X_VOICE.md. Itu referensi suara dari tweet asli, bukan bahan berita.
 - Jalankan tepat 5 perintah X, berurutan (jangan paralel). Tiap perintah punya timeout; kalau gagal, lanjut ke perintah berikutnya dan catat kegagalannya.
   1. node scripts/x-scroll.mjs --mode user --user direkturcrypto --scrolls 2 --limit 20
   2. node scripts/x-scroll.mjs --mode user --user itsjdraven --scrolls 2 --limit 20
@@ -312,6 +375,7 @@ ALAT & SUMBER
   4. node scripts/x-scroll.mjs --mode search --query "(from:openai OR from:GoogleDeepMind OR from:AnthropicAI OR from:claudeai OR from:opencode OR from:GeminiApp) -filter:replies" --scrolls 2 --limit 30
   5. node scripts/x-scroll.mjs --mode search --query "(AI meme OR tech meme OR meme indonesia OR shitpost indonesia) -filter:replies" --scrolls 2 --limit 25
 - Jalankan langsung dan baca stdout. JANGAN redirect output ke /tmp atau file lain. Jangan menjalankan lebih dari 5 perintah X.
+- Pakai batches[] "voice" dan "voice-tech" HANYA untuk mempelajari cara orang ngomong: panjang kalimat, kata ganti, campur Inggris, cara ngejelasin. Jangan ambil topiknya sebagai bahan tweet.
 - Verifikasi klaim penting dengan webfetch/curl ke sumber primer (timeout 20s). Maksimal 4 link. Jangan membuat loop tanpa batas.
 - Total budget 12 menit. Kalau X error atau hasilnya sedikit, jujur sebutkan dan pakai berita AI terverifikasi dari sumber primer sebagai pengganti.
 
@@ -328,19 +392,24 @@ OUTPUT (Bahasa Indonesia, maks 1800 kata)
 3. Rekomendasi 8 terbaik + komposisi (berapa news, meme, AI, question).
 4. Gap: apa yang tidak bisa diverifikasi.
 
-Gaya: Indonesia santai, to the point, boleh "gajelas"/absurd untuk meme, tapi fakta tetap benar. Jangan mengarang post, metrik, URL, atau tool use. Agent berikutnya menulis tweet final dari handoff ini.`;
+Gaya: Indonesia santai, to the point, boleh "gajelas"/absurd untuk meme, tapi fakta tetap benar. Tulis seperti orang, bukan ringkasan berita. Jangan mengarang post, metrik, URL, atau tool use. Agent berikutnya menulis tweet final dari handoff ini.`;
 const dailyWriterPrompt = `Kamu adalah ghostwriter X. Ubah handoff riset menjadi 8 tweet siap publish + jadwal. Jangan riset ulang, jangan buka X, jangan browsing. Kalau director memberi "selected items"/approval note, PAKAI HANYA item yang dipilih. Kalau tidak ada, pilih 8 terbaik dari handoff.
 
 SKILLS
 - Baca dan terapkan .agents/skills/social-media-context-sms/SKILL.md, post-writer-sms, hook-writer-sms, platform-strategy-sms, dan content-pattern-analyzer-sms. Baca file yang relevan dengan tool read.
+- Baca docs/X_VOICE.md dan ikuti aturannya.
 
 BAHASA & VOICE
-- Bahasa Indonesia santai, to the point. Bukan bahasa brand, newsletter, atau korporat.
-- Satu ide per tweet, baris pendek. Tanpa "BREAKING", tanpa "Jadi gini...", tanpa hashtag kecuali benar-benar natural (default []).
-- Gaya "gajelas" boleh: absurd, dry, typo lucu, reaksi berlebihan — tapi tetap nyambung ke fakta dan tidak menyinggung.
+- Tulis seperti orang yang sedang mengetik di X, bukan editor yang merapikan berita.
+- Kata ganti: "gw"/"gua", dan "lu" (JANGAN "lo", "loe", atau "elu").
+- Satu ide per tweet, baris pendek, huruf kecil. Bukan bahasa brand, newsletter, atau korporat.
+- Tanpa em dash, tanpa "BREAKING", tanpa "Jadi gini...", tanpa "Yang menarik:", tanpa hashtag kecuali benar-benar natural (default []).
+- Gaya "gajelas" boleh: absurd, dry, typo lucu, reaksi berlebihan. Tapi tetap nyambung ke fakta dan tidak menyinggung.
 - Istilah teknis (LLM, GPU, open source) boleh tetap Inggris.
+- Kalau topiknya rilis/benchmark/repo, boleh lebih formal: langsung ke fakta, satu kalimat kenapa penting, tanpa hype.
 - Hard limit 280 karakter per caption. Hitung sebelum return.
 - Emoji secukupnya (😭 👀 🔥), jangan ditumpuk.
+- Baca ulang: kalau terdengar seperti ringkasan berita atau template AI, tulis ulang pembukanya.
 - Fakta hanya dari handoff. Jangan mengarang angka, kutipan, cerita pribadi, atau URL.
 
 MIX (tepat 8 post)
@@ -352,8 +421,8 @@ MIX (tepat 8 post)
 Jangan jadikan semuanya news summary. Tidak boleh ada topik atau opener yang duplikat.
 
 JADWAL
-- Asia/Jakarta, tiap 2 jam: 07:00, 09:00, 11:00, 13:00, 15:00, 17:00, 19:00, 21:00.
-- Berita time-sensitive di pagi; meme/pertanyaan di slot engagement.
+- Gunakan jam persis yang diberikan di prompt. Jangan mengarang jam sendiri.
+- Urutkan berita time-sensitive lebih dulu; meme/pertanyaan di slot setelahnya.
 
 OUTPUT
 Return ONLY valid JSON, no markdown, no commentary:

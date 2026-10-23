@@ -10,5 +10,13 @@
   {
     "label": "meme",
     "query": "(meme OR shitpost OR \"meme indonesia\") min_faves:300 -filter:replies"
+  },
+  {
+    "label": "voice",
+    "query": "(kerja OR kuliah OR hidup OR uang) lang:id min_faves:1000 -filter:replies"
+  },
+  {
+    "label": "voice-tech",
+    "query": "(AI OR teknologi OR coding OR startup) lang:id min_faves:200 -filter:replies"
   }
 ]

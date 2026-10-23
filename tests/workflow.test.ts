@@ -8,7 +8,7 @@ import type { SocialBridge } from '../apps/server/src/engine';
 import { Store } from '../apps/server/src/database';
 import { defaultAppearance, defaultSettings } from '../packages/shared/src/types';
 import type { Report } from '../packages/shared/src/types';
-import { formatResearchOptions, instantiatePreset, parseResearchOptions, parseSocialPlan, resolvePlanTime } from '../packages/shared/src/workflow';
+import { formatResearchOptions, instantiatePreset, parseResearchOptions, parseSocialPlan, resolvePlanTime, resolveScheduleWindowTime, scheduleWindowTimes, validateScheduleWindow } from '../packages/shared/src/workflow';
 import type { SocialAnalyticsPayload, SocialBrowserSettings } from '../packages/shared/src/social';
 import type { SocialPublishInput } from '../apps/server/src/social';
 
@@ -56,6 +56,55 @@ test('social plans parse fences, wrappers and real times without inventing a sch
   assert.deepEqual(parseSocialPlan('I could not build a schedule.'), []);
   const preset = instantiatePreset('social-daily');
   assert.ok(preset); assert.equal(preset.steps.at(-1)!.kind, 'social-plan'); assert.equal(preset.steps.at(-1)!.requiresApproval, true);
+});
+
+test('schedule windows spread posts evenly and reject past or impossible windows', () => {
+  const window = { date: '2026-10-21', start: '18:00', end: '20:00' };
+  assert.deepEqual(scheduleWindowTimes(window, 5), ['18:00', '18:30', '19:00', '19:30', '20:00']);
+  assert.deepEqual(scheduleWindowTimes(window, 1), ['19:00']);
+  assert.equal(resolveScheduleWindowTime(window, '18:00', 'Asia/Jakarta'), '2026-10-21T11:00:00.000Z');
+  assert.equal(validateScheduleWindow(window, 8, 'Asia/Jakarta', Date.parse('2026-10-20T00:00:00Z')), undefined);
+  assert.match(validateScheduleWindow({ ...window, start: '20:00', end: '18:00' }, 2, 'Asia/Jakarta', Date.parse('2026-10-20T00:00:00Z')) || '', /later/);
+  assert.match(validateScheduleWindow({ ...window, date: '2026-10-19' }, 2, 'Asia/Jakarta', Date.parse('2026-10-20T00:00:00Z')) || '', /10 minutes/);
+  assert.match(validateScheduleWindow(window, 8, 'Asia/Jakarta', Date.parse('2026-10-21T12:00:00Z')) || '', /10 minutes/);
+});
+
+test('director schedule window is applied to the dependent social plan', async t => {
+  const f = fixture(t), p = await f.engine.configureProvider({ name: 'Window fixture', kind: 'generic', baseUrl: 'http://127.0.0.1:1/v1', model: 'window-test' });
+  const reviewer = f.engine.hire({ ...profile, providerId: p.id, model: 'window-test' });
+  const social = f.engine.hire({ ...socialProfile, providerId: p.id, model: 'window-test' });
+  reviewer.position = { ...reviewer.home }; social.position = { ...social.home };
+  f.engine.providerFactory = () => ({
+    listModels: async () => ['window-test'],
+    execute: async request => {
+      const prompt = request.messages.at(-1)!.content;
+      const text = prompt.includes('Review research')
+        ? JSON.stringify({ options: [
+          { category: 'TECH', text: 'Tweet satu.' },
+          { category: 'MEME', text: 'Tweet dua.' },
+        ] })
+        : JSON.stringify({ posts: [{ time: '07:00', caption: 'ignored schedule', hashtags: [], mediaType: 'text' }] });
+      request.onText(text); return { text };
+    },
+  });
+  const workflow = f.engine.createWorkflow({
+    name: 'Window flow', description: 'Pick a slot.', timezone: 'Asia/Jakarta', schedule: null, enabled: true,
+    steps: [
+      { id: 'review', name: 'Review research', employeeId: reviewer.id, instructions: 'Return research JSON.', expectedOutput: 'Options.', dependsOn: [], requiresApproval: true, kind: 'review', tools: [] },
+      { id: 'plan', name: 'Schedule posts', employeeId: social.id, instructions: 'Schedule the selected options.', expectedOutput: '', dependsOn: ['review'], requiresApproval: false, kind: 'social-plan', platform: 'x', expectedPosts: 2, tools: [] },
+    ],
+  });
+  const run = f.engine.workflowAction(workflow.id, 'run')!;
+  await advanceUntil(f.engine, () => run.steps[0].status === 'awaiting_approval');
+  const selected = run.steps[0].options!.map(option => option.id);
+  const scheduleWindow = { date: '2026-10-21', start: '18:00', end: '20:00' };
+  assert.throws(() => f.engine.approveWorkflowStep(run.id, run.steps[0].id, 'director', f.engine.office, '', selected, { ...scheduleWindow, date: '2026-10-19' }), /10 minutes/);
+  f.engine.approveWorkflowStep(run.id, run.steps[0].id, 'director', f.engine.office, '', selected, scheduleWindow);
+  assert.deepEqual(run.steps[1].scheduleWindow, scheduleWindow);
+  await advanceUntil(f.engine, () => run.steps[1].status === 'approved');
+  const plans = f.engine.s.socialPostPlans.filter(plan => plan.stepRunId === run.steps[1].id).sort((a, b) => Date.parse(a.scheduledAt) - Date.parse(b.scheduledAt));
+  assert.deepEqual(plans.map(plan => plan.scheduledAt), ['2026-10-21T11:00:00.000Z', '2026-10-21T13:00:00.000Z']);
+  assert.deepEqual(plans.map(plan => plan.caption), ['Tweet satu.', 'Tweet dua.']);
 });
 
 test('workflow passes research to the social plan, waits for approval, then publishes the approved schedule', async t => {

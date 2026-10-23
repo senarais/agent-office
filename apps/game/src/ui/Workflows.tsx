@@ -1,13 +1,17 @@
 import { useState } from 'react';
 import type { Schedule } from '../../../../packages/shared/src/automation';
 import { socialPlatforms } from '../../../../packages/shared/src/social';
-import type { WorkflowDefinition, WorkflowRun, WorkflowStep, WorkflowStepRun } from '../../../../packages/shared/src/workflow';
+import type { ScheduleWindow, WorkflowDefinition, WorkflowRun, WorkflowStep, WorkflowStepRun } from '../../../../packages/shared/src/workflow';
 import { instantiatePreset, workflowPresets } from '../../../../packages/shared/src/workflow';
 import { api, useGame } from '../state';
 import { Empty, Field, PixelButton, PixelTabs, useAction } from './kit';
 
 const summary = (schedule: Schedule | null) => !schedule ? 'Manual only' : schedule.type === 'interval' ? `Every ${schedule.intervalMinutes} min` : schedule.type === 'once' ? `Once · ${new Date(schedule.runAt).toLocaleString()}` : schedule.type === 'cron' ? schedule.cron : `${schedule.type} ${schedule.time}${schedule.type === 'weekly' ? ' · ' + schedule.weekdays.map(day => ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][day]).join(', ') : ''}`;
 const statusTone = (status: string) => ['failed', 'cancelled', 'skipped'].includes(status) ? 'warning' : '';
+const defaultScheduleWindow = (timeZone: string): ScheduleWindow => ({
+  date: new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(Date.now() + 86400000)),
+  start: '18:00', end: '20:00',
+});
 
 export function SocialPlanList({ runId, stepRunId, actions = true }: { runId?: string; stepRunId?: string; actions?: boolean }) {
   const world = useGame(s => s.world!); const { run, busy } = useAction();
@@ -56,9 +60,12 @@ function RunCard({ run }: { run: WorkflowRun }) {
   const [revision, setRevision] = useState<Record<string, string>>({});
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [selected, setSelected] = useState<Record<string, string[]>>({});
+  const [windows, setWindows] = useState<Record<string, ScheduleWindow>>({});
   const active = ['queued', 'running', 'waiting_approval', 'revision'].includes(run.status);
+  const timezone = world.workflows.find(workflow => workflow.id === run.workflowId)?.timezone || 'UTC';
   const chosenFor = (step: WorkflowStepRun) => selected[step.id] ?? (step.options || []).slice(0, 8).map(option => option.id);
-  const approve = (step: WorkflowStepRun) => void act(async () => { await api(`/workflows/runs/${run.id}/approve`, { stepRunId: step.id, note: (notes[step.id] || '').trim() || undefined, selectedOptionIds: step.options?.length ? chosenFor(step) : undefined }); setNotes(current => ({ ...current, [step.id]: '' })); useGame.getState().toast(`Approved “${step.name}”.`); });
+  const windowFor = (step: WorkflowStepRun) => windows[step.id] ?? defaultScheduleWindow(timezone);
+  const approve = (step: WorkflowStepRun) => void act(async () => { await api(`/workflows/runs/${run.id}/approve`, { stepRunId: step.id, note: (notes[step.id] || '').trim() || undefined, selectedOptionIds: step.options?.length ? chosenFor(step) : undefined, scheduleWindow: step.kind === 'review' && step.options?.length ? windowFor(step) : undefined }); setNotes(current => ({ ...current, [step.id]: '' })); useGame.getState().toast(`Approved “${step.name}”.`); });
   const revise = (step: WorkflowStepRun) => void act(async () => { await api(`/workflows/runs/${run.id}/revise`, { stepRunId: step.id, instructions: revision[step.id] }); setRevision(current => ({ ...current, [step.id]: '' })); useGame.getState().toast('Revision requested.'); });
   return <article className="workflow-run">
     <header><div className="grow"><span className="eyebrow">WORKFLOW RUN · {new Date(run.scheduledAt).toLocaleString()}</span><h3>{run.workflowName} <span className={`tag ${statusTone(run.status)}`}>{run.status.replaceAll('_', ' ').toUpperCase()}</span></h3><p>{run.brief || 'No description.'}</p></div>{active && <PixelButton className="danger" disabled={busy} onClick={() => void act(() => api(`/workflows/runs/${run.id}/cancel`, {}))}>Cancel run</PixelButton>}</header>
@@ -74,7 +81,9 @@ function RunCard({ run }: { run: WorkflowRun }) {
         {!!step.output && <details><summary>Report output</summary><pre className="document">{step.output}</pre></details>}
         <PlanPreview step={step} />
         {canReview && step.options?.length ? <ResearchOptions step={step} chosen={chosen} onChange={ids => setSelected(current => ({ ...current, [step.id]: ids }))} /> : null}
-        {canReview && <div className="workflow-approval"><Field label={step.kind === 'social-plan' ? 'Final notes for the director (optional)' : 'Catatan tambahan untuk step berikutnya (optional)'}><textarea rows={3} maxLength={10000} value={notes[step.id] || ''} onChange={event => setNotes(current => ({ ...current, [step.id]: event.target.value }))} placeholder={step.kind === 'social-plan' ? 'Contoh: ganti caption nomor 3, jadwal 07:00 jadi 08:00.' : 'Contoh: prioritaskan yang lucu, hindari politik.'} /></Field><PixelButton className="primary" disabled={busy || (!!step.options?.length && (chosen.length < 1 || chosen.length > 12))} onClick={() => approve(step)}>Approve &amp; continue</PixelButton><PixelButton disabled={busy} onClick={() => useGame.getState().open('report', step.reportId!)}>Open report</PixelButton></div>}
+        {canReview && step.kind === 'review' && step.options?.length ? <div className="form-grid schedule-window"><Field label={`Tanggal publish (${timezone})`}><input type="date" required value={windowFor(step).date} onChange={event => setWindows(current => ({ ...current, [step.id]: { ...windowFor(step), date: event.target.value } }))} /></Field><Field label="Jam mulai"><input type="time" required value={windowFor(step).start} onChange={event => setWindows(current => ({ ...current, [step.id]: { ...windowFor(step), start: event.target.value } }))} /></Field><Field label="Jam selesai"><input type="time" required value={windowFor(step).end} onChange={event => setWindows(current => ({ ...current, [step.id]: { ...windowFor(step), end: event.target.value } }))} /></Field></div> : null}
+        {canReview && step.kind === 'review' && step.options?.length ? <p className="note">{chosen.length} tweet akan disebar merata antara {windowFor(step).start} dan {windowFor(step).end} waktu {timezone}. Window harus mulai minimal 10 menit dari sekarang.</p> : null}
+        {canReview && <div className="workflow-approval"><Field label={step.kind === 'social-plan' ? 'Final notes for the director (optional)' : 'Catatan tambahan untuk step berikutnya (optional)'}><textarea rows={3} maxLength={10000} value={notes[step.id] || ''} onChange={event => setNotes(current => ({ ...current, [step.id]: event.target.value }))} placeholder={step.kind === 'social-plan' ? 'Contoh: ganti caption nomor 3, jadwal 07:00 jadi 08:00.' : 'Contoh: prioritaskan yang lucu, hindari politik.'} /></Field><PixelButton className="primary" disabled={busy || (!!step.options?.length && (chosen.length < 1 || chosen.length > 12)) || (step.kind === 'review' && !!step.options?.length && (!windowFor(step).date || windowFor(step).start >= windowFor(step).end))} onClick={() => approve(step)}>Approve &amp; continue</PixelButton><PixelButton disabled={busy} onClick={() => useGame.getState().open('report', step.reportId!)}>Open report</PixelButton></div>}
         {canRevise && <form onSubmit={event => { event.preventDefault(); revise(step); }}><Field label={`Revision instructions for “${step.name}”`}><textarea required rows={2} maxLength={10000} value={revision[step.id] || ''} onChange={event => setRevision(current => ({ ...current, [step.id]: event.target.value }))} placeholder="Change the schedule, rewrite the captions, keep the same research." /></Field><div className="form-actions"><PixelButton disabled={busy || !(revision[step.id] || '').trim()}>Request revision</PixelButton>{step.reportId && <PixelButton type="button" onClick={() => useGame.getState().open('report', step.reportId!)}>Open report</PixelButton>}</div></form>}
       </section>;
     })}</div>

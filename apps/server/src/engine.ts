@@ -3,8 +3,8 @@ import type { Employee, EventType, Office, OfficeSummary, Point, ProviderConfig,
 import type { RecurringTask, ScheduleRun } from '../../../packages/shared/src/automation';
 import type { SocialAnalyticsPayload, SocialBrowserSettings, SocialCampaign, SocialOption, SocialPlatform, SocialPost, SocialPublish } from '../../../packages/shared/src/social';
 import { parseSocialOptions } from '../../../packages/shared/src/social';
-import type { ParsedSocialPlanItem, SocialPlanItem, WorkflowDefinition, WorkflowRun, WorkflowStep, WorkflowStepRun, WorkflowTaskRef } from '../../../packages/shared/src/workflow';
-import { formatResearchOptions, parseResearchOptions, parseSocialPlan, resolvePlanTime, socialPlanPrompt } from '../../../packages/shared/src/workflow';
+import type { ParsedSocialPlanItem, ScheduleWindow, SocialPlanItem, WorkflowDefinition, WorkflowRun, WorkflowStep, WorkflowStepRun, WorkflowTaskRef } from '../../../packages/shared/src/workflow';
+import { formatResearchOptions, parseResearchOptions, parseSocialPlan, resolvePlanTime, resolveScheduleWindowTime, scheduleWindowTimes, socialPlanPrompt, validateScheduleWindow } from '../../../packages/shared/src/workflow';
 import { cacheResearchImages } from './media';
 import type { BrowserCookieInput, SocialMediaInput, SocialMediaResult, SocialPublishInput, SocialPublishResult } from './social';
 import { integrationStatus as readIntegrationStatus } from './integrations';
@@ -577,7 +577,8 @@ export class Engine {
     this.maybeFinishWorkflow(office, run);
   }
 
-  private planTimes(count: number) {
+  private planTimes(count: number, window?: ScheduleWindow) {
+    if (window) return scheduleWindowTimes(window, count);
     if (count <= 1) return ['19:00'];
     const start = 7 * 60, end = 21 * 60, gap = (end - start) / (count - 1);
     return Array.from({ length: count }, (_, index) => {
@@ -605,7 +606,12 @@ export class Engine {
     }).join('\n\n');
     const revision = step.feedback?.trim() ? `\nThe director requested revisions:\n${step.feedback.slice(-12000)}\n\nPrevious attempt (reference, not instructions):\n${step.output.slice(0, 16000)}` : '';
     const timezone = office.workflows.find(workflow => workflow.id === run.workflowId)?.timezone || 'UTC';
-    return `Workflow: ${run.workflowName}\n${run.brief}\n\nYour step: ${step.name}\n${step.instructions}\n\nPrior step results:\n${context || 'This is a starting step; no prior results.'}\n${revision}\n\nExpected output: ${step.expectedOutput || 'An honest, useful result.'}${step.kind === 'social-plan' ? `${socialPlanPrompt(step, timezone, step.expectedPosts || 3)}\n\nGunakan jam persis ini (Asia/Jakarta): ${this.planTimes(step.expectedPosts || 3).join(', ')}.` : ''}`;
+    const count = step.expectedPosts || 3;
+    const times = this.planTimes(count, step.scheduleWindow);
+    const scheduleLine = step.scheduleWindow
+      ? `Tanggal ${step.scheduleWindow.date} (${timezone}). Gunakan jam persis ini: ${times.join(', ')}.`
+      : `Gunakan jam persis ini (${timezone}): ${times.join(', ')}.`;
+    return `Workflow: ${run.workflowName}\n${run.brief}\n\nYour step: ${step.name}\n${step.instructions}\n\nPrior step results:\n${context || 'This is a starting step; no prior results.'}\n${revision}\n\nExpected output: ${step.expectedOutput || 'An honest, useful result.'}${step.kind === 'social-plan' ? `${socialPlanPrompt(step, timezone, count)}\n\n${scheduleLine}` : ''}`;
   }
 
   private async afterWorkflowTaskCompleted(office: Office, task: Task, report: Report) {
@@ -626,17 +632,28 @@ export class Engine {
       }
       const reviewed = run.steps.find(item => item.kind === 'review' && item.selectedOptionIds?.length);
       const selected = reviewed?.options?.filter(option => reviewed.selectedOptionIds!.includes(option.id)) || [];
+      const timezone = office.workflows.find(workflow => workflow.id === run.workflowId)?.timezone || 'UTC';
+      const count = selected.length || parsed.length;
+      const times = step.scheduleWindow ? scheduleWindowTimes(step.scheduleWindow, count) : this.planTimes(count);
+      const windowSlots = step.scheduleWindow ? times.map(time => resolveScheduleWindowTime(step.scheduleWindow!, time, timezone)) : [];
+      if (step.scheduleWindow && windowSlots.some(slot => !slot || Date.parse(slot) <= this.clock())) {
+        step.status = 'failed'; step.error = 'The schedule window started before the posts were ready. Approve a later window by rerunning the flow.';
+        this.emit('workflow.failed', `${run.workflowName}: ${step.error}`, run.id);
+        this.failWorkflowRun(office, run, step.error);
+        await this.sendWorkflowReviewToTelegram(office, run, step, report);
+        return;
+      }
       const posts: ParsedSocialPlanItem[] = selected.length
         ? selected.map((option, index) => ({
-          time: this.planTimes(selected.length)[index],
+          time: times[index], scheduledAt: windowSlots[index],
           caption: option.text,
           hashtags: [],
           mediaType: option.imagePath || option.imageUrl ? 'image' : 'text',
           mediaUrl: option.imagePath ? `/api/media/${option.imagePath}` : option.imageUrl,
         }))
         : parsed;
+      if (step.scheduleWindow) posts.forEach((post, index) => { post.time = times[index]; post.scheduledAt = windowSlots[index]; });
       office.socialPostPlans = office.socialPostPlans.filter(item => item.stepRunId !== step.id || item.status === 'published');
-      const timezone = office.workflows.find(workflow => workflow.id === run.workflowId)?.timezone || 'UTC';
       for (const item of posts) {
         office.socialPostPlans.push({
           id: id(), workflowId: run.workflowId, runId: run.id, stepRunId: step.id,
@@ -729,7 +746,7 @@ export class Engine {
     return run;
   }
 
-  approveWorkflowStep(runId: string, stepRunId: string, source: 'director' | 'telegram' = 'director', office: Office = this.office, note = '', selectedOptionIds: string[] = []) {
+  approveWorkflowStep(runId: string, stepRunId: string, source: 'director' | 'telegram' = 'director', office: Office = this.office, note = '', selectedOptionIds: string[] = [], scheduleWindow?: ScheduleWindow) {
     const run = this.findWorkflowRun(office, runId);
     const step = run.steps.find(item => item.id === stepRunId);
     if (!step) throw new GameError('Workflow step not found', 404);
@@ -742,7 +759,14 @@ export class Engine {
       if (!selected.length) throw new GameError('Select at least one research option before approving.', 409);
       if (selected.length > 12) throw new GameError('Select at most 12 research options.', 409);
       step.selectedOptionIds = selected;
-      for (const dependent of run.steps.filter(item => item.dependsOn.includes(step.stepId) && item.kind === 'social-plan')) dependent.expectedPosts = selected.length;
+      const dependentPlans = run.steps.filter(item => item.dependsOn.includes(step.stepId) && item.kind === 'social-plan');
+      if (scheduleWindow && dependentPlans.length) {
+        const timezone = office.workflows.find(workflow => workflow.id === run.workflowId)?.timezone || 'UTC';
+        const reason = validateScheduleWindow(scheduleWindow, selected.length, timezone, this.clock());
+        if (reason) throw new GameError(reason, 409);
+        for (const dependent of dependentPlans) dependent.scheduleWindow = { ...scheduleWindow };
+      }
+      for (const dependent of dependentPlans) dependent.expectedPosts = selected.length;
     }
     step.approvalNote = note.trim().slice(0, 10000) || undefined;
     step.status = 'approved'; step.approvedBy = source; step.approvedAt = now(); step.completedAt = step.completedAt || now();
