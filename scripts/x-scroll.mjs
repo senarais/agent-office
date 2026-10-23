@@ -137,6 +137,8 @@ try {
     console.error('X profile is not signed in. Open the office Social panel and sign in to X once, then retry.');
     process.exitCode = 2;
   } else {
+    const cookieButton = page.getByRole('button', { name: /Accept all cookies|Refuse non-essential cookies/i }).first();
+    if (await cookieButton.count().catch(() => 0)) await cookieButton.click({ timeout: 5000 }).catch(() => undefined);
     const results = [];
     for (const [index, item] of targets.entries()) {
       if (index > 0) {
@@ -187,8 +189,13 @@ try {
       results.push({ label: item.label, query: item.query || undefined, url: page.url(), count: tweets.length, tweets });
       console.error(`[x-scroll] ${item.label}: ${tweets.length} tweets`);
     }
+    const total = results.reduce((sum, item) => sum + item.count, 0);
+    if (!total) {
+      const body = await page.locator('body').innerText().catch(() => '');
+      throw new Error(/Something went wrong|rate limit/i.test(body) ? 'X returned no tweets and shows an error; the account is likely rate-limited. Retry later.' : 'X returned no tweets for these queries.');
+    }
     const output = batch
-      ? JSON.stringify({ mode: 'batch', count: results.reduce((sum, item) => sum + item.count, 0), batches: results }, null, 2)
+      ? JSON.stringify({ mode: 'batch', count: total, batches: results }, null, 2)
       : JSON.stringify({ ...results[0], mode }, null, 2);
     writeCache(output); console.log(output);
   }
