@@ -74,10 +74,11 @@ test('director schedule window is applied to the dependent social plan', async t
   const reviewer = f.engine.hire({ ...profile, providerId: p.id, model: 'window-test' });
   const social = f.engine.hire({ ...socialProfile, providerId: p.id, model: 'window-test' });
   reviewer.position = { ...reviewer.home }; social.position = { ...social.home };
+  const prompts: string[] = [];
   f.engine.providerFactory = () => ({
     listModels: async () => ['window-test'],
     execute: async request => {
-      const prompt = request.messages.at(-1)!.content;
+      const prompt = request.messages.at(-1)!.content; prompts.push(prompt);
       const text = prompt.includes('Review research')
         ? JSON.stringify({ options: [
           { category: 'TECH', text: 'Tweet satu.' },
@@ -102,6 +103,7 @@ test('director schedule window is applied to the dependent social plan', async t
   f.engine.approveWorkflowStep(run.id, run.steps[0].id, 'director', f.engine.office, '', selected, scheduleWindow);
   assert.deepEqual(run.steps[1].scheduleWindow, scheduleWindow);
   await advanceUntil(f.engine, () => run.steps[1].status === 'approved');
+  assert.match(prompts.at(-1)!, /Tanggal 2026-10-21 \(Asia\/Jakarta\)\. Gunakan jam persis ini: 18:00, 20:00\./);
   const plans = f.engine.s.socialPostPlans.filter(plan => plan.stepRunId === run.steps[1].id).sort((a, b) => Date.parse(a.scheduledAt) - Date.parse(b.scheduledAt));
   assert.deepEqual(plans.map(plan => plan.scheduledAt), ['2026-10-21T11:00:00.000Z', '2026-10-21T13:00:00.000Z']);
   assert.deepEqual(plans.map(plan => plan.caption), ['Tweet satu.', 'Tweet dua.']);
