@@ -12,15 +12,19 @@
     "query": "(Indonesia OR Jakarta OR teknologi OR AI OR gratis OR promo) lang:id min_faves:300 -filter:replies"
   },
   {
+    "label": "trends2",
+    "query": "(teknologi OR \"baru rilis\" OR update OR gadget OR aplikasi OR startup) lang:id min_faves:150 -filter:replies"
+  },
+  {
     "label": "meme",
     "query": "(meme OR shitpost OR \"AI meme\" OR \"tech meme\") min_faves:200 -filter:replies"
   },
   {
-    "label": "voice",
-    "query": "(kerja OR kuliah OR hidup OR uang) lang:id min_faves:1000 -filter:replies"
+    "label": "meme2",
+    "query": "(lucu OR ngakak OR \"programmer meme\" OR \"startup meme\") lang:id min_faves:100 -filter:replies"
   },
   {
-    "label": "voice-tech",
-    "query": "(AI OR teknologi OR coding OR startup) lang:id min_faves:200 -filter:replies"
+    "label": "voice",
+    "query": "(kerja OR kuliah OR hidup OR uang) lang:id min_faves:1000 -filter:replies"
   }
 ]

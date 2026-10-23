@@ -16,7 +16,7 @@ const mode = option('mode', 'home');
 const query = option('query', '');
 const user = option('user', '').replace(/^@/, '');
 const explicitUrl = option('url', '');
-const scrolls = Math.max(0, Math.min(30, Number(option('scrolls', '5')) || 5));
+const scrolls = Math.max(0, Math.min(30, Number.isFinite(Number(option('scrolls', '5'))) ? Number(option('scrolls', '5')) : 5));
 const limit = Math.max(1, Math.min(100, Number(option('limit', '30')) || 30));
 const batchFile = option('batch', '');
 const cacheTtl = Math.max(0, Number(option('cache-ttl', '600000')) || 0);
@@ -72,7 +72,7 @@ const lockDir = resolve(dataDir, 'browser', 'x-scrape.lock');
 const sleep = ms => new Promise(done => setTimeout(done, ms));
 const alive = pid => { try { process.kill(pid, 0); return true; } catch (error) { return error?.code === 'EPERM'; } };
 async function acquireLock() {
-  const deadline = Date.now() + 480000; let waited = 0;
+  const deadline = Date.now() + 1200000; let waited = 0;
   mkdirSync(resolve(dataDir, 'browser'), { recursive: true, mode: 0o700 });
   while (Date.now() < deadline) {
     try { mkdirSync(lockDir); writeFileSync(resolve(lockDir, 'pid'), String(process.pid)); return; }
@@ -85,7 +85,7 @@ async function acquireLock() {
       await sleep(2000);
     }
   }
-  throw new Error('X scrape queue is busy after 8 minutes. Retry later.');
+  throw new Error('X scrape queue is busy after 20 minutes. Retry later.');
 }
 function releaseLock() {
   try { if (Number(readFileSync(resolve(lockDir, 'pid'), 'utf8').trim()) === process.pid) rmSync(lockDir, { recursive: true, force: true }); } catch { /* gone */ }
@@ -98,7 +98,7 @@ const warmed = readCache();
 if (warmed) { console.log(warmed); process.exit(0); }
 // Playwright costs ~100 MB; load it only after this process owns the shared browser queue.
 const { chromium } = await import('playwright');
-const hardStop = setTimeout(() => { console.error('[x-scroll] browser work exceeded 8 minutes; releasing the queue.'); process.exit(1); }, 480000);
+const hardStop = setTimeout(() => { console.error('[x-scroll] browser work exceeded 20 minutes; releasing the queue.'); process.exit(1); }, 1200000);
 async function launch() {
   let lastError;
   for (let attempt = 1; attempt <= 2; attempt++) {
