@@ -1,15 +1,19 @@
 [
   {
     "label": "tech",
-    "query": "(AI OR OpenAI OR Anthropic OR GoogleDeepMind OR teknologi) lang:id min_faves:300 -filter:replies"
+    "query": "(AI OR OpenAI OR Anthropic OR Claude OR Gemini OR \"open source\" OR \"dev tool\") lang:id min_faves:150 -filter:replies"
+  },
+  {
+    "label": "promo",
+    "query": "(gratis OR promo OR diskon OR \"free tier\" OR \"free trial\" OR \"lifetime deal\") (AI OR app OR tool OR subscription OR course OR hosting) min_faves:100 -filter:replies"
   },
   {
     "label": "trends",
-    "query": "(Indonesia OR Jakarta OR nasional OR viral) lang:id min_faves:400 -filter:replies"
+    "query": "(Indonesia OR Jakarta OR teknologi OR AI OR gratis OR promo) lang:id min_faves:300 -filter:replies"
   },
   {
     "label": "meme",
-    "query": "(meme OR shitpost OR \"meme indonesia\") min_faves:300 -filter:replies"
+    "query": "(meme OR shitpost OR \"AI meme\" OR \"tech meme\") min_faves:200 -filter:replies"
   },
   {
     "label": "voice",

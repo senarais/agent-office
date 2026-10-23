@@ -757,7 +757,7 @@ export class Engine {
       const valid = new Set(step.options.map(option => option.id));
       const selected = [...new Set(selectedOptionIds)].filter(value => valid.has(value));
       if (!selected.length) throw new GameError('Select at least one research option before approving.', 409);
-      if (selected.length > 12) throw new GameError('Select at most 12 research options.', 409);
+      if (selected.length > 30) throw new GameError('Select at most 30 research options.', 409);
       step.selectedOptionIds = selected;
       const dependentPlans = run.steps.filter(item => item.dependsOn.includes(step.stepId) && item.kind === 'social-plan');
       if (scheduleWindow && dependentPlans.length) {
